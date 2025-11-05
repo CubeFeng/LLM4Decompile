@@ -31,10 +31,15 @@ class DecompilerConfig:
         self.project_name = "tmp_ghidra_proj"
         
         # 二进制文件配置
-        self.binary_path = os.path.join(self.script_dir, "../samples/cwe-020")
-        # self.binary_path = os.path.join(self.script_dir, "../samples/libandroid_jni.so")
-        self.file_name = "cwe-020"
-        
+        self.binary_filename = "cwe-020"
+        self.binary_dir = os.path.join(self.script_dir, "../cwe")
+
+        # self.binary_filename = "libandroid_jni.so"
+        # self.binary_dir = os.path.join(self.script_dir, "../samples")
+
+        self.binary_path = os.path.join(self.binary_dir, self.binary_filename)
+        self.file_name = self.binary_filename  # 保持向后兼容性，使用相同的文件名
+
         # GPU配置
         self.batch_size = 1
         self.batch_accumulation = 1
@@ -653,6 +658,8 @@ class ModelInferenceModule:
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((RuntimeError, InferenceError))
     )
+
+    # 最终的模型推理
     def _process_batch(self, model_mgr, filtered_functions, batch_indices, start_idx, total_count):
         """处理单个批次（带重试机制）"""
         batch_prompts = []
@@ -867,9 +874,6 @@ def main():
     logger.info("===== 开始二进制反编译流程 =====")
     
     try:
-        # 健康检查
-        health_status = health_check()
-        logger.info("系统健康状态检查完成")
         
         # 使用资源管理器
         with GPUResourceManager(config):
@@ -895,7 +899,7 @@ def main():
                 'success': True,
                 'results': results,
                 # 'performance': performance_report,
-                'health_status': health_status
+                # 'health_status': health_status
             }
             
     except Exception as e:
