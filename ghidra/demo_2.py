@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import torch
 import gc
@@ -8,10 +9,10 @@ import traceback
 import psutil
 import threading
 import json
-import logging
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from log_utils import global_logger as logger
 
 # ==================== 配置管理类 ====================
 class DecompilerConfig:
@@ -73,9 +74,9 @@ class DecompilerConfig:
                 if hasattr(self, key):
                     setattr(self, key, value)
                     
-            logging.info(f"从文件 {config_file} 加载配置成功")
+            logger.info(f"从文件 {config_file} 加载配置成功")
         except Exception as e:
-            logging.warning(f"加载配置文件失败: {str(e)}，使用默认配置")
+            logger.warning(f"加载配置文件失败: {str(e)}，使用默认配置")
     
     def save_to_file(self, config_file):
         """保存配置到JSON文件"""
@@ -86,9 +87,9 @@ class DecompilerConfig:
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_dict, f, indent=2, ensure_ascii=False)
                 
-            logging.info(f"配置已保存到 {config_file}")
+            logger.info(f"配置已保存到 {config_file}")
         except Exception as e:
-            logging.error(f"保存配置文件失败: {str(e)}")
+            logger.error(f"保存配置文件失败: {str(e)}")
     
     @property
     def device(self):
@@ -122,7 +123,7 @@ class GPUResourceManager:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
     
     def __enter__(self):
         self.cleanup()
@@ -150,7 +151,7 @@ class ModelManager:
         self.model = None
         self.tokenizer = None
         self.device = None
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
     
     def __enter__(self):
         self.load_model()
@@ -283,7 +284,7 @@ class DecompilerPipeline:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
         self.modules = {}
         self.results = {}
         self.performance_monitor = PerformanceMonitor()
@@ -329,7 +330,7 @@ class HealthCheckModule:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
     
     def process(self, previous_results):
         """执行健康检查"""
@@ -351,7 +352,7 @@ class GhidraModule:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
     
     def process(self, previous_results):
         """执行Ghidra反编译"""
@@ -404,7 +405,7 @@ class PreprocessModule:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
         # 从配置中获取最小函数长度，如果没有则使用默认值10
         self.min_function_length = getattr(config, 'min_function_length', 10)
 
@@ -513,7 +514,7 @@ class ModelInferenceModule:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
         self.performance_monitor = PerformanceMonitor()
     
     def process(self, previous_results):
@@ -710,7 +711,7 @@ class PostprocessModule:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
     
     def process(self, previous_results):
         """执行后处理"""
@@ -749,7 +750,7 @@ class PerformanceMonitor:
             "start_time": time.time()
         }
         self.process = psutil.Process(os.getpid())
-        self.logger = logging.getLogger('decompiler')
+        self.logger = logger
         self._stop_monitoring = False
     
     def record_module_time(self, module_name, elapsed_time):
@@ -820,56 +821,22 @@ def get_device(force_gpu=False):
             device = torch.device("cuda:0")
             gpu_name = torch.cuda.get_device_name(0)
             total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            logging.info(f"强制使用GPU: {gpu_name} ({total_memory:.2f} GB)")
+            logger.info(f"强制使用GPU: {gpu_name} ({total_memory:.2f} GB)")
             return device
         else:
             raise ResourceError("强制使用GPU，但未检测到可用的CUDA设备")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logging.info(f"使用设备: {device}")
+        logger.info(f"使用设备: {device}")
         return device
-
-def setup_logging(log_level=logging.INFO):
-    """设置日志系统"""
-    logger = logging.getLogger('decompiler')
-    logger.setLevel(log_level)
-    
-    # 避免重复添加处理器
-    if logger.handlers:
-        return logger
-    
-    # 控制台处理器
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    
-    # 文件处理器
-    log_file = f'decompiler_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    
-    # 格式化器
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-    
-    # 添加处理器
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-    
-    # 设置第三方库的日志级别
-    logging.getLogger('transformers').setLevel(logging.WARNING)
-    logging.getLogger('torch').setLevel(logging.WARNING)
-    
-    return logger
 
 # ==================== 主程序 ====================
 def main():
     """主程序入口"""
     # 初始化配置和日志
     config = DecompilerConfig()
-    logger = setup_logging()
+    # 该调用可以移除
+    logger.setup_logging()
     
     logger.info("===== 开始二进制反编译流程 =====")
     
