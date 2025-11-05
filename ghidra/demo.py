@@ -66,10 +66,12 @@ with tempfile.TemporaryDirectory() as temp_dir:
         with open(fileName +'_' + opt +'.pseudo','w',encoding='utf-8') as f:
             f.write(input_asm_prompt)
 
+
+# 使用LLM4Decompile-Ref将Ghidra伪代码优化为C语言
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
-model_path = 'LLM4Binary/llm4decompile-6.7b-v2' # V2 Model
+model_path = '../models/llm4decompile-9b-v2' # V2 Model
 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16).cuda()
@@ -79,7 +81,11 @@ with open(fileName +'_' + OPT[0] +'.pseudo','r') as f:#optimization level O0
 inputs = tokenizer(asm_func, return_tensors="pt").to(model.device)
 with torch.no_grad():
     outputs = model.generate(**inputs, max_new_tokens=2048)### max length to 4096, max new tokens should be below the range
-c_func_decompile = tokenizer.decode(outputs[0][len(inputs[0]):-1])
+
+# 修正解码切片逻辑
+input_len = inputs["input_ids"].shape[1]
+gen_ids = outputs[0, input_len:]
+c_func_decompile = tokenizer.decode(gen_ids, skip_special_tokens=True)
 
 with open(fileName +'_' + OPT[0] +'.pseudo','r') as f:#original file
     func = f.read()

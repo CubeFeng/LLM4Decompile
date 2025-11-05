@@ -449,6 +449,7 @@ class PreprocessModule:
                                 code_part = line.split('/*', 1)[0].strip()
                                 if code_part:  # 保留注释前的代码
                                     line = code_part
+
                                 else:  # 如果只有注释开始标记，跳过此行
                                     in_multiline_comment = True
                                     continue
@@ -690,7 +691,7 @@ class ModelInferenceModule:
             gen_ids = outputs[j, input_len:]
             optimized_code = model_mgr.tokenizer.decode(gen_ids, skip_special_tokens=True)
             batch_results.append(optimized_code)
-            # batch_results.append(f"// Function {idx+1}\n" + optimized_code)
+            # batch_results.append(f"// Function {idx+1}\n" + optimized_code)  # 20251105 是否包含 Function 标记
         
         current_progress = min(start_idx + len(batch_indices), total_count)
         self.logger.info(f"  批处理进度: {current_progress}/{total_count}")
