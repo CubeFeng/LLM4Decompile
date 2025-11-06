@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from log_utils import global_logger as logger
+from ResourceMonitor import MonitorLevel, ResourceMonitor, create_simple_monitor
 
 # ==================== 配置管理类 ====================
 class DecompilerConfig:
@@ -59,6 +60,7 @@ class DecompilerConfig:
         # 监控配置
         self.monitor_interval = 0.5
         self.timeout_duration = 100
+        self.monitor_performance = True
         
         # 如果提供了配置文件，则从文件加载配置
         if config_file and os.path.exists(config_file):
@@ -117,32 +119,6 @@ class ResourceError(DecompilerError):
     """资源异常"""
     pass
 
-# ==================== 资源管理器 ====================
-class GPUResourceManager:
-    """GPU资源管理器（上下文管理器）"""
-    
-    def __init__(self, config):
-        self.config = config
-        self.logger = logger
-    
-    def __enter__(self):
-        self.cleanup()
-        self.logger.info("GPU资源管理器已启动")
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
-        self.logger.info("GPU资源管理器已清理")
-    
-    def cleanup(self):
-        """清理GPU和系统内存"""
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()
-        except Exception as e:
-            self.logger.warning(f"资源清理过程中出现警告: {str(e)}")
-
 class ModelManager:
     """模型管理器（上下文管理器）"""
     
@@ -176,7 +152,7 @@ class ModelManager:
             
             # 加载模型
             model_kwargs = {
-                "torch_dtype": torch.float16,
+                "dtype": torch.float16,
                 "low_cpu_mem_usage": True,
                 "use_cache": True,
                 "local_files_only": True  # 本地加载模型，而不是从 HUgging Face HUb 下载
@@ -287,7 +263,7 @@ class DecompilerPipeline:
         self.logger = logger
         self.modules = {}
         self.results = {}
-        self.performance_monitor = PerformanceMonitor()
+        self.performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
     
     def register_module(self, name, module):
         """注册处理模块"""
@@ -306,14 +282,11 @@ class DecompilerPipeline:
                     self.logger.info(f"执行模块: {module_name}")
                     
                     # 性能监控
-                    start_time = time.time()
-                    result = self.modules[module_name].process(self.results)
-                    elapsed_time = time.time() - start_time
+                    with self.performance_monitor.time_block(module_name):
+                        result = self.modules[module_name].process(self.results)
                     
                     self.results[module_name] = result
-                    self.performance_monitor.record_module_time(module_name, elapsed_time)
-                    
-                    self.logger.info(f"模块 {module_name} 执行完成，耗时: {elapsed_time:.2f}s")
+                    self.logger.info(f"模块 {module_name} 执行完成")
                     
                 except Exception as e:
                     self.logger.error(f"模块 {module_name} 执行失败: {str(e)}")
@@ -515,7 +488,7 @@ class ModelInferenceModule:
     def __init__(self, config):
         self.config = config
         self.logger = logger
-        self.performance_monitor = PerformanceMonitor()
+        self.performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
     
     def process(self, previous_results):
         """执行模型推理"""
@@ -542,13 +515,6 @@ class ModelInferenceModule:
         # 动态计算批处理大小
         dynamic_batch_size = self._calculate_optimal_batch_size(model_mgr, filtered_functions)
         self.logger.info(f"使用动态批处理大小: {dynamic_batch_size}")
-        
-        # 性能监控线程
-        monitor_thread = threading.Thread(
-            target=self.performance_monitor.continuous_monitoring,
-            daemon=True
-        )
-        monitor_thread.start()
         
         # 分批处理函数
         for i in range(0, total_filtered, dynamic_batch_size):
@@ -623,7 +589,8 @@ class ModelInferenceModule:
                         **inputs,
                         max_new_tokens=10,  # 只生成少量token进行测试
                         use_cache=True,
-                        do_sample=False
+                        do_sample=False,
+                        pad_token_id=model_mgr.tokenizer.eos_token_id
                     )
                 
                 torch.cuda.empty_cache()
@@ -685,7 +652,6 @@ class ModelInferenceModule:
                 use_cache=True,
                 do_sample=False,
                 num_beams=1,
-                early_stopping=True,
                 pad_token_id=model_mgr.tokenizer.eos_token_id
             )
         
@@ -715,7 +681,7 @@ class PostprocessModule:
     
     def process(self, previous_results):
         """执行后处理"""
-        self.logger.info("执行后处理...")
+        # self.logger.info("执行后处理...")
         
         # 汇总所有结果
         final_result = {
@@ -734,84 +700,8 @@ class PostprocessModule:
             final_result['processed_count'] = previous_results['model_inference']['processed_count']
             final_result['failed_count'] = previous_results['model_inference']['failed_count']
         
-        self.logger.info("后处理完成")
+        # self.logger.info("后处理完成")
         return final_result
-
-# ==================== 性能监控系统 ====================
-class PerformanceMonitor:
-    """性能监控系统"""
-    
-    def __init__(self):
-        self.metrics = {
-            "module_times": {},
-            "gpu_util_samples": [],
-            "cpu_util_samples": [],
-            "memory_samples": [],
-            "start_time": time.time()
-        }
-        self.process = psutil.Process(os.getpid())
-        self.logger = logger
-        self._stop_monitoring = False
-    
-    def record_module_time(self, module_name, elapsed_time):
-        """记录模块执行时间"""
-        self.metrics["module_times"][module_name] = elapsed_time
-    
-    def continuous_monitoring(self):
-        """持续性能监控"""
-        while not self._stop_monitoring:
-            try:
-                # CPU和内存监控
-                cpu_percent = self.process.cpu_percent(interval=None)
-                memory_percent = self.process.memory_percent()
-                
-                self.metrics["cpu_util_samples"].append(cpu_percent)
-                self.metrics["memory_samples"].append(memory_percent)
-                
-                # GPU监控
-                if torch.cuda.is_available():
-                    try:
-                        import pynvml
-                        pynvml.nvmlInit()
-                        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                        gpu_util = util.gpu
-                        self.metrics["gpu_util_samples"].append(gpu_util)
-                        pynvml.nvmlShutdown()
-                    except ImportError:
-                        pass
-                
-                time.sleep(0.5)  # 监控间隔
-                
-            except Exception as e:
-                self.logger.debug(f"性能监控采样失败: {str(e)}")
-                break
-    
-    def stop_monitoring(self):
-        """停止监控"""
-        self._stop_monitoring = True
-    
-    def generate_report(self):
-        """生成性能报告"""
-        total_time = time.time() - self.metrics["start_time"]
-        
-        report = {
-            "total_execution_time": total_time,
-            "module_breakdown": self.metrics["module_times"],
-            "average_cpu_usage": sum(self.metrics["cpu_util_samples"]) / len(self.metrics["cpu_util_samples"]) if self.metrics["cpu_util_samples"] else 0,
-            "average_memory_usage": sum(self.metrics["memory_samples"]) / len(self.metrics["memory_samples"]) if self.metrics["memory_samples"] else 0,
-            "average_gpu_usage": sum(self.metrics["gpu_util_samples"]) / len(self.metrics["gpu_util_samples"]) if self.metrics["gpu_util_samples"] else 0,
-        }
-        
-        self.logger.info("=== 性能报告 ===")
-        self.logger.info(f"总执行时间: {report['total_execution_time']:.2f}s")
-        for module, time_taken in report['module_breakdown'].items():
-            self.logger.info(f"  {module}: {time_taken:.2f}s")
-        self.logger.info(f"平均CPU使用率: {report['average_cpu_usage']:.1f}%")
-        self.logger.info(f"平均内存使用率: {report['average_memory_usage']:.1f}%")
-        self.logger.info(f"平均GPU使用率: {report['average_gpu_usage']:.1f}%")
-        
-        return report
 
 # ==================== 工具函数 ====================
 def get_device(force_gpu=False):
@@ -837,13 +727,32 @@ def main():
     config = DecompilerConfig()
     # 该调用可以移除
     logger.setup_logging()
+
+    # 替换性能监控初始化代码
+    if hasattr(config, 'monitor_performance') and config.monitor_performance:
+        # 创建资源监控器，设置采样间隔为2秒，启用GPU监控
+        performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
+        
+        # 根据需要调整监控级别
+        performance_monitor.set_monitor_level(MonitorLevel.EXTENDED)  # 或者使用其他级别
+        
+        # 添加告警回调
+        def cpu_alert_handler(usage):
+            logger.warning(f"⚠️ CPU 使用率告警: {usage:.2f}%")
+            
+        def memory_alert_handler(usage_mb):
+            logger.warning(f"⚠️ 内存使用告警: {usage_mb:.2f} MB")
     
     logger.info("===== 开始二进制反编译流程 =====")
     
     try:
         
         # 使用资源管理器
-        with GPUResourceManager(config):
+        with ResourceMonitor(sampling_interval=config.monitor_interval, enable_gpu_monitoring=True) as resource_monitor:
+            # 可选：根据需要调整告警阈值
+            resource_monitor.set_alert_threshold('cpu_percent', 85.0)
+            resource_monitor.set_alert_threshold('memory_percent', 80.0)
+
             # 创建流水线
             pipeline = DecompilerPipeline(config)
             
@@ -857,17 +766,39 @@ def main():
             # 执行流水线
             results = pipeline.execute_pipeline()
             
-            # 生成性能报告
-            # performance_report = pipeline.performance_monitor.generate_report()
+        # 生成性能报告
+        if hasattr(config, 'monitor_performance') and config.monitor_performance:
+            # 获取统计信息
+            stats = resource_monitor.get_statistics()
+            
+            # 打印资源使用摘要
+            logger.info("\n=== 资源使用统计摘要 ===")
+            # logger.info(f"平均 CPU 使用率: {stats['cpu']['avg_usage']:.2f}%")
+            # logger.info(f"峰值内存使用: {stats['memory']['max_usage_mb']:.2f} MB")
+            # if 'gpu' in stats:
+            #     for gpu_id, gpu_stats in stats['gpu'].items():
+            #         logger.info(f"GPU {gpu_id} 平均使用率: {gpu_stats['avg_utilization']:.2f}%")
+            #         logger.info(f"GPU {gpu_id} 峰值显存使用: {gpu_stats['max_memory_used_mb']:.2f} MB")
+            
+            # 导出详细统计数据到JSON文件
+            # performance_report_file = f"performance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            # resource_monitor.export_data(performance_report_file)
+            # logger.info(f"性能统计数据已导出到: {performance_report_file}")
             
             logger.info("===== 反编译流程成功完成 =====")
             
-            return {
+            # 确保无论性能监控是否启用，都会返回结果
+            result_dict = {
                 'success': True,
-                'results': results,
-                # 'performance': performance_report,
-                # 'health_status': health_status
+                'results': results
             }
+            
+            # 只有在启用性能监控时才添加统计信息
+            if hasattr(config, 'monitor_performance') and config.monitor_performance:
+                stats = resource_monitor.get_statistics()
+                result_dict['resource_statistics'] = stats
+            
+            return result_dict
             
     except Exception as e:
         logger.error(f"反编译流程失败: {str(e)}")
@@ -889,7 +820,14 @@ if __name__ == "__main__":
     
     if result['success']:
         print("✅ 反编译流程成功完成")
-        print(f"📊 总执行时间: {result['performance']['total_execution_time']:.2f}s")
+        # 打印资源统计信息
+        if 'resource_statistics' in result:
+            stats = result['resource_statistics']
+            print(f"📊 总监控时长: {stats['time_range']['duration_seconds']:.2f}秒")
+            print(f"📊 平均CPU使用率: {stats['cpu']['avg']:.1f}%")
+            print(f"📊 平均内存使用率: {stats['memory']['avg']:.1f}%")
+            if 'gpu_utilization' in stats:
+                print(f"📊 平均GPU使用率: {stats['gpu_utilization']['avg']:.1f}%")
     else:
         print(f"❌ 反编译流程失败: {result['error']}")
         exit(1)
