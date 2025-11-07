@@ -63,8 +63,9 @@ class TorchGpuMetricsCollector(MetricsCollector):
         self.gpu_count = 0
         self.last_memory_allocated = {}
         self.last_collection_time = time.time()
-        self.memory_change_history = deque(maxlen=10)  # 记录最近10次内存变化
-        self.utilization_smoothing_factor = 0.7  # 利用率平滑因子
+        self.memory_change_history = deque(maxlen=10)
+        self.utilization_smoothing_factor = 0.7
+        self.collector_name = "Torch GPU Collector"
         
         if self.has_torch:
             self.initialize()
@@ -89,8 +90,8 @@ class TorchGpuMetricsCollector(MetricsCollector):
             for i in range(self.gpu_count):
                 self.last_memory_allocated[i] = torch.cuda.memory_allocated(i)
                 device_name = torch.cuda.get_device_name(i)
-                total_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)  # GB
-                self.logger.info(f"检测到 GPU {i}: {device_name} ({total_memory:.1f} GB)")
+                total_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                self.logger.info(f"Torch检测到 GPU {i}: {device_name} ({total_memory:.1f} GB)")
             
             self.initialized = True
             self.logger.info(f"Torch GPU 监控初始化完成，找到 {self.gpu_count} 个 GPU 设备")
@@ -107,7 +108,7 @@ class TorchGpuMetricsCollector(MetricsCollector):
             memory_diff = memory_allocated - self.last_memory_allocated.get(gpu_index, 0)
             memory_change_rate = abs(memory_diff) / (1024 * 1024)  # MB/s
             
-            # 基于内存变化率估算利用率（经验公式）
+            # 基于内存变化率估算利用率
             if time_diff > 0:
                 base_utilization = min(100.0, memory_change_rate / time_diff * 2.0)
             else:
@@ -117,7 +118,7 @@ class TorchGpuMetricsCollector(MetricsCollector):
             if hasattr(torch.cuda, 'get_device_properties'):
                 total_memory = torch.cuda.get_device_properties(gpu_index).total_memory
                 memory_ratio = memory_allocated / total_memory if total_memory > 0 else 0
-                memory_based_utilization = memory_ratio * 50.0  # 内存使用率贡献最多50%
+                memory_based_utilization = memory_ratio * 50.0
             else:
                 memory_based_utilization = 0.0
             
@@ -152,16 +153,13 @@ class TorchGpuMetricsCollector(MetricsCollector):
             
             # 获取内存使用情况
             memory_allocated = torch.cuda.memory_allocated(gpu_index)
-            memory_reserved = torch.cuda.memory_reserved(gpu_index)
             
             # 获取设备属性
             if hasattr(torch.cuda, 'get_device_properties'):
                 device_props = torch.cuda.get_device_properties(gpu_index)
                 total_memory = device_props.total_memory
-                memory_percent = (memory_allocated / total_memory) * 100 if total_memory > 0 else 0
             else:
                 total_memory = None
-                memory_percent = 0
             
             # 估算 GPU 利用率
             utilization = self._estimate_gpu_utilization(gpu_index, memory_allocated, time_diff)
@@ -171,22 +169,6 @@ class TorchGpuMetricsCollector(MetricsCollector):
                 'gpu_memory_used_mb': memory_allocated / (1024 * 1024),
                 'gpu_memory_total_mb': total_memory / (1024 * 1024) if total_memory else None,
             })
-            
-            # 扩展监控级别下采集更多信息
-            if MonitorLevel.current_level >= MonitorLevel.EXTENDED:
-                try:
-                    # 获取 GPU 温度（通过 nvidia-smi 备选方案）
-                    temperature = self._get_gpu_temperature(gpu_index)
-                    if temperature is not None:
-                        result['gpu_temperature'] = temperature
-                    
-                    # 获取 GPU 功耗（通过 nvidia-smi 备选方案）
-                    power_usage = self._get_gpu_power_usage(gpu_index)
-                    if power_usage is not None:
-                        result['gpu_power_usage'] = power_usage
-                        
-                except Exception as e:
-                    self.logger.debug(f"获取 GPU 扩展信息失败: {str(e)}")
             
             # 更新最后记录
             self.last_memory_allocated[gpu_index] = memory_allocated
@@ -198,54 +180,266 @@ class TorchGpuMetricsCollector(MetricsCollector):
             self.logger.warning(f"Torch GPU 指标采集失败: {str(e)}")
             # 如果连续失败，尝试重新初始化
             if "CUDA" in str(e) or "cuda" in str(e):
-                self.logger.info("检测到 CUDA 错误，尝试重新初始化 GPU 监控")
+                self.logger.info("检测到 CUDA 错误，尝试重新初始化 Torch GPU 监控")
                 self.initialized = False
                 time.sleep(1.0)
                 self.initialize()
             return {}
     
-    def _get_gpu_temperature(self, gpu_index: int) -> Optional[float]:
-        """通过 nvidia-smi 获取 GPU 温度（备选方案）"""
-        try:
-            import subprocess
-            result = subprocess.run([
-                'nvidia-smi', 
-                '--query-gpu=temperature.gpu',
-                '--format=csv,noheader,nounits',
-                '-i', str(gpu_index)
-            ], capture_output=True, text=True, timeout=5)
-            
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if lines and lines[0].strip().isdigit():
-                    return float(lines[0].strip())
-        except Exception as e:
-            self.logger.debug(f"nvidia-smi 温度查询失败: {str(e)}")
-        return None
-    
-    def _get_gpu_power_usage(self, gpu_index: int) -> Optional[float]:
-        """通过 nvidia-smi 获取 GPU 功耗（备选方案）"""
-        try:
-            import subprocess
-            result = subprocess.run([
-                'nvidia-smi', 
-                '--query-gpu=power.draw',
-                '--format=csv,noheader,nounits',
-                '-i', str(gpu_index)
-            ], capture_output=True, text=True, timeout=5)
-            
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if lines and lines[0].strip().replace('.', '').isdigit():
-                    return float(lines[0].strip())
-        except Exception as e:
-            self.logger.debug(f"nvidia-smi 功耗查询失败: {str(e)}")
-        return None
-    
     def shutdown(self):
         """关闭 GPU 监控"""
         self.initialized = False
         self.memory_change_history.clear()
+
+# ==================== 基于 nvidia-smi 的 GPU 监控收集器 ====================
+class NvidiaSmiMetricsCollector(MetricsCollector):
+    """基于 nvidia-smi 命令行的 GPU 指标收集器"""
+    
+    def __init__(self):
+        self.initialized = False
+        self.logger = logger
+        self.gpu_count = 0
+        self.collector_name = "NVIDIA-SMI Collector"
+        self.consecutive_failures = 0
+        self.max_consecutive_failures = 3
+        
+        self.initialize()
+    
+    def initialize(self) -> bool:
+        """初始化 GPU 监控"""
+        try:
+            import subprocess
+            
+            # 检查 nvidia-smi 是否可用
+            result = subprocess.run(['nvidia-smi', '--list-gpus'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                self.logger.warning("nvidia-smi 不可用，无法进行 GPU 监控")
+                return False
+            
+            # 解析 GPU 数量
+            lines = result.stdout.strip().split('\n')
+            self.gpu_count = len([line for line in lines if 'GPU' in line])
+            
+            if self.gpu_count == 0:
+                self.logger.warning("未检测到 GPU 设备")
+                return False
+            
+            # 获取 GPU 详细信息
+            for i in range(self.gpu_count):
+                try:
+                    result = subprocess.run([
+                        'nvidia-smi', 
+                        '--query-gpu=name,memory.total',
+                        '--format=csv,noheader,nounits',
+                        '-i', str(i)
+                    ], capture_output=True, text=True, timeout=5)
+                    
+                    if result.returncode == 0:
+                        data = result.stdout.strip().split(', ')
+                        if len(data) >= 2:
+                            gpu_name = data[0].strip()
+                            memory_total = data[1].strip()
+                            self.logger.info(f"NVIDIA-SMI检测到 GPU {i}: {gpu_name} ({memory_total} MB)")
+                except Exception as e:
+                    self.logger.debug(f"获取 GPU {i} 详细信息失败: {str(e)}")
+            
+            self.initialized = True
+            self.consecutive_failures = 0
+            self.logger.info(f"NVIDIA-SMI GPU 监控初始化完成，找到 {self.gpu_count} 个 GPU 设备")
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"NVIDIA-SMI GPU 监控初始化失败: {str(e)}")
+            return False
+    
+    def collect(self) -> Dict[str, Any]:
+        """收集 GPU 指标"""
+        if not self.initialized:
+            return {}
+        
+        try:
+            import subprocess
+            
+            # 查询 GPU 状态
+            result = subprocess.run([
+                'nvidia-smi',
+                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw',
+                '--format=csv,noheader,nounits'
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                self.consecutive_failures += 1
+                if self.consecutive_failures >= self.max_consecutive_failures:
+                    self.logger.warning("NVIDIA-SMI 连续失败次数过多，暂停使用")
+                    self.initialized = False
+                return {}
+            
+            lines = result.stdout.strip().split('\n')
+            if not lines or not lines[0]:
+                return {}
+            
+            # 解析第一块 GPU 的数据
+            data = lines[0].split(', ')
+            if len(data) < 3:
+                return {}
+            
+            result = {}
+            
+            # GPU 利用率
+            if data[0].replace('.', '').isdigit():
+                result['gpu_utilization'] = float(data[0])
+            
+            # 显存使用
+            if data[1].replace('.', '').isdigit():
+                result['gpu_memory_used_mb'] = float(data[1])
+            
+            # 显存总量
+            if data[2].replace('.', '').isdigit():
+                result['gpu_memory_total_mb'] = float(data[2])
+            
+            # GPU 温度
+            if len(data) > 3 and data[3].replace('.', '').isdigit():
+                result['gpu_temperature'] = float(data[3])
+            
+            # GPU 功耗
+            if len(data) > 4 and data[4].replace('.', '').isdigit():
+                result['gpu_power_usage'] = float(data[4])
+            
+            # 重置失败计数
+            self.consecutive_failures = 0
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"NVIDIA-SMI GPU 指标采集失败: {str(e)}")
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= self.max_consecutive_failures:
+                self.logger.warning("NVIDIA-SMI 连续失败次数过多，暂停使用")
+                self.initialized = False
+            return {}
+    
+    def shutdown(self):
+        """关闭 GPU 监控"""
+        self.initialized = False
+
+# ==================== 混合 GPU 监控收集器 ====================
+class HybridGpuMetricsCollector(MetricsCollector):
+    """混合 GPU 监控收集器 - 结合 Torch 和 NVIDIA-SMI 方案"""
+    
+    def __init__(self, fallback_order: List[str] = None):
+        self.logger = logger
+        self.collectors = []
+        self.active_collector = None
+        self.fallback_order = fallback_order or ['torch', 'nvidia_smi']
+        self.collector_map = {}
+        self.switch_count = 0
+        self.max_switches = 5  # 最大切换次数，防止频繁切换
+        self.collector_name = "Hybrid GPU Collector"
+        self.initialized = False  # 添加 initialized 属性
+        
+        self.initialize()
+    
+    def initialize(self) -> bool:
+        """初始化混合 GPU 监控"""
+        collectors_config = {
+            'torch': TorchGpuMetricsCollector,
+            'nvidia_smi': NvidiaSmiMetricsCollector
+        }
+        
+        # 按优先级初始化收集器
+        for collector_name in self.fallback_order:
+            try:
+                collector_class = collectors_config.get(collector_name)
+                if collector_class:
+                    collector = collector_class()
+                    if collector.initialized:
+                        self.collectors.append(collector)
+                        self.collector_map[collector_name] = collector
+                        self.logger.info(f"✅ {collector.collector_name} 初始化成功")
+            except Exception as e:
+                self.logger.warning(f"初始化 {collector_name} 收集器失败: {str(e)}")
+                continue
+        
+        # 设置默认活跃收集器
+        if self.collectors:
+            self.active_collector = self.collectors[0]
+            self.initialized = True  # 设置初始化状态
+            self.logger.info(f"🎯 使用 {self.active_collector.collector_name} 作为默认 GPU 监控收集器")
+            return True
+        else:
+            self.logger.warning("❌ 所有 GPU 监控方案均失败，禁用 GPU 监控")
+            return False
+    
+    def collect(self) -> Dict[str, Any]:
+        """收集 GPU 指标 - 带自动故障转移"""
+        if not self.initialized:
+            return {}
+        
+        try:
+            # 首先尝试当前活跃收集器
+            result = self.active_collector.collect()
+            if result:  # 如果成功获取数据
+                return result
+            
+            # 当前收集器失败，尝试切换到备用收集器
+            for collector in self.collectors:
+                if collector != self.active_collector and collector.initialized:
+                    try:
+                        fallback_result = collector.collect()
+                        if fallback_result:  # 备用收集器成功
+                            old_collector = self.active_collector.collector_name
+                            self.active_collector = collector
+                            self.switch_count += 1
+                            
+                            self.logger.info(f"🔄 从 {old_collector} 切换到 {collector.collector_name} "
+                                           f"(切换次数: {self.switch_count}/{self.max_switches})")
+                            
+                            # 如果切换次数过多，可能系统不稳定，考虑禁用某些收集器
+                            if self.switch_count >= self.max_switches:
+                                self.logger.warning("⚠️ GPU监控切换次数过多，系统可能不稳定")
+                            
+                            return fallback_result
+                    except Exception as e:
+                        self.logger.debug(f"备用收集器 {collector.collector_name} 采集失败: {str(e)}")
+                        continue
+            
+            # 所有收集器都失败
+            self.logger.warning("所有 GPU 监控收集器均失败")
+            return {}
+            
+        except Exception as e:
+            self.logger.error(f"混合 GPU 指标采集失败: {str(e)}")
+            return {}
+    
+    def get_collector_status(self) -> Dict[str, Any]:
+        """获取收集器状态信息"""
+        status = {
+            'active_collector': self.active_collector.collector_name if self.active_collector else None,
+            'switch_count': self.switch_count,
+            'collectors': {}
+        }
+        
+        for collector in self.collectors:
+            status['collectors'][collector.collector_name] = {
+                'initialized': collector.initialized,
+                'available': collector.initialized
+            }
+        
+        return status
+    
+    def shutdown(self):
+        """关闭所有 GPU 监控收集器"""
+        for collector in self.collectors:
+            try:
+                collector.shutdown()
+            except Exception as e:
+                self.logger.warning(f"关闭 {collector.collector_name} 失败: {str(e)}")
+        
+        self.active_collector = None
+        self.initialized = False  # 关闭时重置初始化状态
+        self.logger.info("混合 GPU 监控已关闭")
 
 # ==================== 其他收集器保持不变 ====================
 class CpuMetricsCollector(MetricsCollector):
@@ -335,10 +529,10 @@ class DiskMetricsCollector(MetricsCollector):
                 'disk_write_mb': 0.0
             }
 
-# ==================== 主监控类（使用 Torch GPU 收集器） ====================
+# ==================== 主监控类（使用混合 GPU 收集器） ====================
 class ResourceMonitor:
     """
-    实时资源监控模块 - 使用 Torch GPU 监控方案
+    实时资源监控模块 - 使用混合 GPU 监控方案
     """
     _instance = None
     _lock = threading.RLock()
@@ -355,7 +549,9 @@ class ResourceMonitor:
                  enable_gpu_monitoring: bool = True,
                  log_level: str = "INFO",
                  monitor_level: MonitorLevel = MonitorLevel.BASIC,
-                 stop_timeout: float = 5.0):
+                 stop_timeout: float = 5.0,
+                 gpu_monitor_strategy: str = "hybrid",
+                 gpu_fallback_order: List[str] = None):
         """
         初始化资源监控器
         
@@ -366,6 +562,8 @@ class ResourceMonitor:
             log_level: 日志级别
             monitor_level: 监控级别
             stop_timeout: 停止监控时的超时时间（秒）
+            gpu_monitor_strategy: GPU监控策略 ('hybrid', 'torch', 'nvidia_smi')
+            gpu_fallback_order: 混合模式下GPU收集器的回退顺序
         """
         # 配置验证
         if sampling_interval <= 0:
@@ -391,6 +589,8 @@ class ResourceMonitor:
             self.max_samples = max_samples
             self.enable_gpu_monitoring = enable_gpu_monitoring
             self.stop_timeout = stop_timeout
+            self.gpu_monitor_strategy = gpu_monitor_strategy
+            self.gpu_fallback_order = gpu_fallback_order
             
             # 监控状态
             self._is_monitoring = False
@@ -433,7 +633,7 @@ class ResourceMonitor:
             # 标记为已初始化
             self._initialized = True
             
-            self.logger.info("资源监控器初始化完成（使用 Torch GPU 监控方案）")
+            self.logger.info(f"资源监控器初始化完成（GPU监控策略: {gpu_monitor_strategy}）")
     
     def _initialize_collectors(self):
         """初始化指标收集器"""
@@ -445,12 +645,19 @@ class ResourceMonitor:
         
         # 添加GPU收集器（如果启用）
         if self.enable_gpu_monitoring:
-            self.gpu_collector = TorchGpuMetricsCollector()
-            if self.gpu_collector.initialized:
+            if self.gpu_monitor_strategy == 'torch':
+                self.gpu_collector = TorchGpuMetricsCollector()
+            elif self.gpu_monitor_strategy == 'nvidia_smi':
+                self.gpu_collector = NvidiaSmiMetricsCollector()
+            else:  # hybrid
+                self.gpu_collector = HybridGpuMetricsCollector(self.gpu_fallback_order)
+            
+            # 修复：检查 gpu_collector 是否有 initialized 属性
+            if hasattr(self.gpu_collector, 'initialized') and self.gpu_collector.initialized:
                 self.collectors.append(self.gpu_collector)
-                self.logger.info("Torch GPU 监控已启用")
+                self.logger.info(f"✅ {self.gpu_collector.collector_name} 已启用")
             else:
-                self.logger.warning("Torch GPU 监控初始化失败，将继续使用CPU和内存监控")
+                self.logger.warning("❌ GPU监控初始化失败，将继续使用CPU和内存监控")
         
         # 添加磁盘收集器（扩展监控）
         if MonitorLevel.current_level >= MonitorLevel.EXTENDED:
@@ -657,6 +864,12 @@ class ResourceMonitor:
                 return list(self.metrics_history)[-last_n:]
             return list(self.metrics_history)
     
+    def get_gpu_collector_status(self) -> Dict[str, Any]:
+        """获取GPU收集器状态信息"""
+        if hasattr(self, 'gpu_collector') and self.gpu_collector and hasattr(self.gpu_collector, 'get_collector_status'):
+            return self.gpu_collector.get_collector_status()
+        return {}
+    
     def get_statistics(self, last_n: int = None) -> Dict:
         """获取统计信息"""
         metrics = self.get_metrics_snapshot(last_n)
@@ -779,6 +992,7 @@ class ResourceMonitor:
             'sampling_interval': self.sampling_interval,
             'metrics_count': len(metrics),
             'monitor_level': MonitorLevel.current_level.name,
+            'gpu_strategy': self.gpu_monitor_strategy,
             'metrics': [
                 {
                     'timestamp': m.timestamp,
@@ -830,9 +1044,20 @@ class ResourceMonitor:
     
     def health_check(self) -> Dict[str, Any]:
         """系统健康检查"""
+        gpu_status = {}
+        if hasattr(self, 'gpu_collector') and self.gpu_collector:
+            if hasattr(self.gpu_collector, 'get_collector_status'):
+                gpu_status = self.gpu_collector.get_collector_status()
+            else:
+                gpu_status = {
+                    'active_collector': self.gpu_collector.collector_name,
+                    'initialized': self.gpu_collector.initialized
+                }
+        
         health_status = {
             'monitoring_active': self._is_monitoring,
             'gpu_available': self.gpu_collector.initialized if hasattr(self, 'gpu_collector') and self.gpu_collector else False,
+            'gpu_status': gpu_status,
             'history_size': len(self.metrics_history),
             'collectors_count': len(self.collectors),
             'thread_alive': self._monitor_thread.is_alive() if self._monitor_thread else False
@@ -851,13 +1076,14 @@ class ResourceMonitor:
     
     # 装饰器支持
     @classmethod
-    def as_decorator(cls, sampling_interval=2.0, enable_gpu=True, monitor_level=MonitorLevel.BASIC):
+    def as_decorator(cls, sampling_interval=2.0, enable_gpu=True, monitor_level=MonitorLevel.BASIC, gpu_strategy="hybrid"):
         """作为装饰器使用"""
         def decorator(func):
             def wrapper(*args, **kwargs):
                 monitor = cls(sampling_interval=sampling_interval, 
                              enable_gpu=enable_gpu, 
-                             monitor_level=monitor_level)
+                             monitor_level=monitor_level,
+                             gpu_monitor_strategy=gpu_strategy)
                 with monitor:
                     return func(*args, **kwargs)
             return wrapper
@@ -900,15 +1126,23 @@ ResourceMonitor.ModuleTimer = ModuleTimer
 # ==================== 工具函数 ====================
 def create_simple_monitor(sampling_interval: float = 2.0, 
                          enable_gpu: bool = True, 
-                         monitor_level: MonitorLevel = MonitorLevel.BASIC) -> ResourceMonitor:
+                         monitor_level: MonitorLevel = MonitorLevel.BASIC,
+                         gpu_strategy: str = "hybrid",
+                         gpu_fallback_order: List[str] = None) -> ResourceMonitor:
     """
     创建简单的资源监控器
+    
+    Args:
+        gpu_strategy: GPU监控策略 ('hybrid', 'torch', 'nvidia_smi')
+        gpu_fallback_order: 混合模式下GPU收集器的回退顺序
     """
     monitor = ResourceMonitor(
         sampling_interval=sampling_interval,
         enable_gpu_monitoring=enable_gpu,
         monitor_level=monitor_level,
-        log_level="INFO"
+        log_level="INFO",
+        gpu_monitor_strategy=gpu_strategy,
+        gpu_fallback_order=gpu_fallback_order
     )
     
     return monitor
