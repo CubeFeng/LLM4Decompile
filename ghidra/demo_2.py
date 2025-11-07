@@ -654,6 +654,9 @@ class ModelInferenceModule:
                 num_beams=1,
                 pad_token_id=model_mgr.tokenizer.eos_token_id
             )
+
+        # 资源监控
+        self.performance_monitor.print_current_status()
         
         # 解码结果
         batch_results = []
