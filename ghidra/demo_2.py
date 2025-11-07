@@ -33,14 +33,14 @@ class DecompilerConfig:
         self.project_name = "tmp_ghidra_proj"
         
         # 二进制文件配置
-        self.binary_filename = "cwe-020"
+        self.binary_filename = "cwe-191"
         self.binary_dir = os.path.join(self.script_dir, "../cwe")
 
         # self.binary_filename = "libandroid_jni.so"
         # self.binary_dir = os.path.join(self.script_dir, "../samples")
 
         self.binary_path = os.path.join(self.binary_dir, self.binary_filename)
-        self.file_name = self.binary_filename  # 保持向后兼容性，使用相同的文件名
+        self.file_name = self.binary_filename
 
         # GPU配置
         self.batch_size = 1
@@ -61,6 +61,8 @@ class DecompilerConfig:
         self.monitor_interval = 0.5
         self.timeout_duration = 100
         self.monitor_performance = True
+        self.enable_realtime_monitoring = True  # 启用实时监控
+        self.realtime_update_interval = 1.0     # 实时监控更新间隔
         
         # 如果提供了配置文件，则从文件加载配置
         if config_file and os.path.exists(config_file):
@@ -155,7 +157,7 @@ class ModelManager:
                 "dtype": torch.float16,
                 "low_cpu_mem_usage": True,
                 "use_cache": True,
-                "local_files_only": True  # 本地加载模型，而不是从 HUgging Face HUb 下载
+                "local_files_only": True  # 本地加载模型，而不是从 Hugging Face HUb 下载
             }
             
             # 设备映射配置
@@ -263,7 +265,11 @@ class DecompilerPipeline:
         self.logger = logger
         self.modules = {}
         self.results = {}
-        self.performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
+        self.performance_monitor = create_simple_monitor(
+            sampling_interval=1.0, 
+            enable_gpu=True,
+            monitor_level=MonitorLevel.EXTENDED
+        )
     
     def register_module(self, name, module):
         """注册处理模块"""
@@ -272,54 +278,38 @@ class DecompilerPipeline:
     
     def execute_pipeline(self):
         """执行处理流水线"""
-        modules_order = ['health_check', 'ghidra', 'preprocess', 'model_inference', 'postprocess']
+        modules_order = ['ghidra', 'preprocess', 'model_inference', 'postprocess']
         
         self.logger.info("开始执行反编译流水线")
         
-        for module_name in self.modules.keys():
+        for module_name in modules_order:
             if module_name in self.modules:
                 try:
-                    self.logger.info(f"执行模块: {module_name}")
+                    self.logger.info(f"🎯 开始执行模块: {module_name}")
+                    
+                    # 记录模块开始时间
+                    module_start_time = time.time()
                     
                     # 性能监控
                     with self.performance_monitor.time_block(module_name):
                         result = self.modules[module_name].process(self.results)
                     
+                    # 计算模块执行时间
+                    module_duration = time.time() - module_start_time
+                    
                     self.results[module_name] = result
-                    self.logger.info(f"模块 {module_name} 执行完成")
+                    self.logger.info(f"✅ 模块 {module_name} 执行完成 (耗时: {module_duration:.3f}秒)")
                     
                 except Exception as e:
-                    self.logger.error(f"模块 {module_name} 执行失败: {str(e)}")
+                    self.logger.error(f"❌ 模块 {module_name} 执行失败: {str(e)}")
                     raise DecompilerError(f"模块 {module_name} 执行失败") from e
             else:
-                self.logger.warning(f"未找到模块: {module_name}，跳过")
+                self.logger.warning(f"⚠️ 未找到模块: {module_name}，跳过")
                     
-        self.logger.info("反编译流水线执行完成")
+        self.logger.info("🎉 反编译流水线执行完成")
         return self.results
 
 # ==================== 具体模块实现 ====================
-class HealthCheckModule:
-    """健康检查模块"""
-    
-    def __init__(self, config):
-        self.config = config
-        self.logger = logger
-    
-    def process(self, previous_results):
-        """执行健康检查"""
-        self.logger.info("执行系统健康检查...")
-        health_status = health_check()
-        
-        # 记录健康状态
-        for check, status in health_status.items():
-            self.logger.info(f"  健康检查 - {check}: {status}")
-        
-        # 检查关键资源
-        if health_status.get('overall_status') != 'healthy':
-            self.logger.warning("系统健康状态异常，但将继续执行")
-        
-        return health_status
-
 class GhidraModule:
     """Ghidra反编译模块"""
     
@@ -379,9 +369,7 @@ class PreprocessModule:
     def __init__(self, config):
         self.config = config
         self.logger = logger
-        # 从配置中获取最小函数长度，如果没有则使用默认值10
         self.min_function_length = getattr(config, 'min_function_length', 10)
-
     
     def process(self, previous_results):
         """预处理反编译代码"""
@@ -404,53 +392,42 @@ class PreprocessModule:
                     # 处理多行注释
                     if in_multiline_comment:
                         if '*/' in line:
-                            # 多行注释结束，获取注释结束后的内容
                             line = line.split('*/', 1)[1].strip()
                             in_multiline_comment = False
-                            if not line:  # 如果注释后没有内容，跳过此行
+                            if not line:
                                 continue
                     else:
-                        # 检查是否有单行注释，但是要保留函数标记
                         if '//' in line and '// Function:' not in line:
-                            # 保留注释前的代码（如果有）
                             code_part = line.split('//', 1)[0].strip()
-                            if not code_part:  # 如果只有注释没有代码，跳过此行
+                            if not code_part:
                                 continue
                             line = code_part
                         
-                        # 检查是否开始多行注释
                         if '/*' in line:
-                            if '*/' in line:  # 单行内完成的多行注释
+                            if '*/' in line:
                                 code_before = line.split('/*', 1)[0].strip()
                                 code_after = line.split('*/', 1)[1].strip()
                                 line = code_before + ' ' + code_after
-                            else:  # 多行注释开始
+                            else:
                                 code_part = line.split('/*', 1)[0].strip()
-                                if code_part:  # 保留注释前的代码
+                                if code_part:
                                     line = code_part
-
-                                else:  # 如果只有注释开始标记，跳过此行
+                                else:
                                     in_multiline_comment = True
                                     continue
                 except Exception as e:
                     self.logger.warning(f"处理第{line_idx+1}行时出错: {str(e)}")
-                    # 出错时保留原始行，继续处理
                 
                 # 函数分割逻辑
-                if '// Function:' in line:  # 保留函数标记
-                    # 移除函数注释 Function
+                if '// Function:' in line:
                     if len(current_func) > 0:
                         functions.append('\n'.join(current_func))
                     current_func = []
-
-                # if '// Function:' in line and current_func:  # 保留函数标记
-                #     functions.append('\n'.join(current_func))
-                #     current_func = [line]
                 else:
-                    if line.strip():  # 只添加非空行
+                    if line.strip():
                         current_func.append(line)
             
-            if current_func:  # 确保最后一个函数也被添加
+            if current_func:
                 functions.append('\n'.join(current_func))
             
             # 使用改进的函数过滤逻辑
@@ -488,7 +465,6 @@ class ModelInferenceModule:
     def __init__(self, config):
         self.config = config
         self.logger = logger
-        self.performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
     
     def process(self, previous_results):
         """执行模型推理"""
@@ -558,24 +534,20 @@ class ModelInferenceModule:
     def _calculate_optimal_batch_size(self, model_mgr, sample_functions):
         """动态计算最优批处理大小"""
         if not torch.cuda.is_available():
-            return 1  # CPU模式使用较小的批处理大小
+            return 1
         
         current_batch_size = self.config.batch_size
         
-        # 如果只有少量函数，不需要调整
         if len(sample_functions) <= current_batch_size:
             return min(current_batch_size, len(sample_functions))
         
-        # 测试当前批处理大小是否合适
         while current_batch_size >= 1:
             try:
-                # 准备测试数据
                 test_prompts = []
                 for i in range(min(current_batch_size, len(sample_functions))):
                     prompt = self._preprocess_prompt(sample_functions[i])
                     test_prompts.append(prompt)
                 
-                # 测试推理
                 inputs = model_mgr.tokenizer(
                     test_prompts,
                     return_tensors="pt",
@@ -587,7 +559,7 @@ class ModelInferenceModule:
                 with torch.no_grad():
                     model_mgr.model.generate(
                         **inputs,
-                        max_new_tokens=10,  # 只生成少量token进行测试
+                        max_new_tokens=10,
                         use_cache=True,
                         do_sample=False,
                         pad_token_id=model_mgr.tokenizer.eos_token_id
@@ -608,7 +580,7 @@ class ModelInferenceModule:
                 self.logger.warning(f"批处理大小测试失败: {str(e)}，使用默认大小")
                 return self.config.batch_size
         
-        return 1  # 最低保证
+        return 1
     
     def _preprocess_prompt(self, func):
         """预处理单个函数的提示文本"""
@@ -626,8 +598,6 @@ class ModelInferenceModule:
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((RuntimeError, InferenceError))
     )
-
-    # 最终的模型推理
     def _process_batch(self, model_mgr, filtered_functions, batch_indices, start_idx, total_count):
         """处理单个批次（带重试机制）"""
         batch_prompts = []
@@ -654,9 +624,6 @@ class ModelInferenceModule:
                 num_beams=1,
                 pad_token_id=model_mgr.tokenizer.eos_token_id
             )
-
-        # 资源监控
-        self.performance_monitor.print_current_status()
         
         # 解码结果
         batch_results = []
@@ -668,7 +635,6 @@ class ModelInferenceModule:
             gen_ids = outputs[j, input_len:]
             optimized_code = model_mgr.tokenizer.decode(gen_ids, skip_special_tokens=True)
             batch_results.append(optimized_code)
-            # batch_results.append(f"// Function {idx+1}\n" + optimized_code)  # 20251105 是否包含 Function 标记
         
         current_progress = min(start_idx + len(batch_indices), total_count)
         self.logger.info(f"  批处理进度: {current_progress}/{total_count}")
@@ -684,8 +650,6 @@ class PostprocessModule:
     
     def process(self, previous_results):
         """执行后处理"""
-        # self.logger.info("执行后处理...")
-        
         # 汇总所有结果
         final_result = {
             'success': True,
@@ -703,7 +667,6 @@ class PostprocessModule:
             final_result['processed_count'] = previous_results['model_inference']['processed_count']
             final_result['failed_count'] = previous_results['model_inference']['failed_count']
         
-        # self.logger.info("后处理完成")
         return final_result
 
 # ==================== 工具函数 ====================
@@ -728,84 +691,100 @@ def main():
     """主程序入口"""
     # 初始化配置和日志
     config = DecompilerConfig()
-    # 该调用可以移除
-    logger.setup_logging()
-
-    # 替换性能监控初始化代码
-    if hasattr(config, 'monitor_performance') and config.monitor_performance:
-        # 创建资源监控器，设置采样间隔为2秒，启用GPU监控
-        performance_monitor = create_simple_monitor(sampling_interval=1.0, enable_gpu=True)
-        
-        # 根据需要调整监控级别
-        performance_monitor.set_monitor_level(MonitorLevel.EXTENDED)  # 或者使用其他级别
-        
-        # 添加告警回调
-        def cpu_alert_handler(usage):
-            logger.warning(f"⚠️ CPU 使用率告警: {usage:.2f}%")
-            
-        def memory_alert_handler(usage_mb):
-            logger.warning(f"⚠️ 内存使用告警: {usage_mb:.2f} MB")
     
     logger.info("===== 开始二进制反编译流程 =====")
     
     try:
+        # 创建资源监控器
+        resource_monitor = ResourceMonitor(
+            sampling_interval=config.monitor_interval,
+            enable_gpu_monitoring=True,
+            monitor_level=MonitorLevel.EXTENDED
+        )
         
-        # 使用资源管理器
-        with ResourceMonitor(sampling_interval=config.monitor_interval, enable_gpu_monitoring=True) as resource_monitor:
-            # 可选：根据需要调整告警阈值
-            resource_monitor.set_alert_threshold('cpu_percent', 85.0)
-            resource_monitor.set_alert_threshold('memory_percent', 80.0)
-
-            # 创建流水线
-            pipeline = DecompilerPipeline(config)
+        # 启动监控
+        resource_monitor.start_monitoring()
+        
+        # 启用实时监控显示（根据配置）
+        if config.enable_realtime_monitoring:
+            resource_monitor.enable_realtime_monitoring(
+                update_interval=config.realtime_update_interval
+            )
+            logger.info("✅ 实时监控已启用")
+        
+        # 设置告警阈值
+        resource_monitor.set_alert_threshold('cpu_percent', 85.0)
+        resource_monitor.set_alert_threshold('memory_percent', 80.0)
+        resource_monitor.set_alert_threshold('gpu_utilization', 95.0)
+        resource_monitor.set_alert_threshold('gpu_memory_percent', 90.0)
+        
+        # 添加告警回调
+        def alert_handler(message, metrics):
+            logger.warning(f"🚨 资源告警: {message}")
+            # 可以在告警时执行特定操作，如保存快照、发送通知等
+        
+        resource_monitor.add_alert_callback(alert_handler)
+        
+        # 创建流水线
+        pipeline = DecompilerPipeline(config)
+        
+        # 注册模块
+        pipeline.register_module('ghidra', GhidraModule(config))
+        pipeline.register_module('preprocess', PreprocessModule(config))
+        pipeline.register_module('model_inference', ModelInferenceModule(config))
+        pipeline.register_module('postprocess', PostprocessModule(config))
+        
+        # 执行流水线
+        results = pipeline.execute_pipeline()
+        
+        # 获取最终统计信息
+        stats = resource_monitor.get_statistics()
+        
+        # 停止实时监控显示
+        if config.enable_realtime_monitoring:
+            resource_monitor.disable_realtime_monitoring()
+        
+        # 停止监控
+        resource_monitor.stop_monitoring()
+        
+        # 打印最终统计报告
+        logger.info("="*60)
+        logger.info("📊 反编译流程资源使用统计")
+        logger.info("="*60)
+        
+        if stats:
+            logger.info(f"监控时长: {stats['time_range']['duration_seconds']:.1f} 秒")
+            logger.info(f"采样数量: {stats['sample_count']} 次")
             
-            # 注册模块
-            # pipeline.register_module('health_check', HealthCheckModule(config))
-            pipeline.register_module('ghidra', GhidraModule(config))
-            pipeline.register_module('preprocess', PreprocessModule(config))
-            pipeline.register_module('model_inference', ModelInferenceModule(config))
-            pipeline.register_module('postprocess', PostprocessModule(config))
+            logger.info(f"📈 CPU使用率: {stats['cpu']['avg']:.1f}% (峰值: {stats['cpu']['max']:.1f}%)")
+            logger.info(f"📈 内存使用率: {stats['memory']['avg']:.1f}% (峰值: {stats['memory']['max']:.1f}%)")
             
-            # 执行流水线
-            results = pipeline.execute_pipeline()
+            if 'gpu_utilization' in stats:
+                logger.info(f"🎮 GPU使用率: {stats['gpu_utilization']['avg']:.1f}% (峰值: {stats['gpu_utilization']['max']:.1f}%)")
             
-        # 生成性能报告
-        if hasattr(config, 'monitor_performance') and config.monitor_performance:
-            # 获取统计信息
-            stats = resource_monitor.get_statistics()
-            
-            # 打印资源使用摘要
-            logger.info("\n=== 资源使用统计摘要 ===")
-            # logger.info(f"平均 CPU 使用率: {stats['cpu']['avg_usage']:.2f}%")
-            # logger.info(f"峰值内存使用: {stats['memory']['max_usage_mb']:.2f} MB")
-            # if 'gpu' in stats:
-            #     for gpu_id, gpu_stats in stats['gpu'].items():
-            #         logger.info(f"GPU {gpu_id} 平均使用率: {gpu_stats['avg_utilization']:.2f}%")
-            #         logger.info(f"GPU {gpu_id} 峰值显存使用: {gpu_stats['max_memory_used_mb']:.2f} MB")
-            
-            # 导出详细统计数据到JSON文件
-            # performance_report_file = f"performance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            # resource_monitor.export_data(performance_report_file)
-            # logger.info(f"性能统计数据已导出到: {performance_report_file}")
-            
-            logger.info("===== 反编译流程成功完成 =====")
-            
-            # 确保无论性能监控是否启用，都会返回结果
-            result_dict = {
-                'success': True,
-                'results': results
-            }
-            
-            # 只有在启用性能监控时才添加统计信息
-            if hasattr(config, 'monitor_performance') and config.monitor_performance:
-                stats = resource_monitor.get_statistics()
-                result_dict['resource_statistics'] = stats
-            
-            return result_dict
+            if 'gpu_memory' in stats:
+                logger.info(f"🎯 平均显存使用: {stats['gpu_memory']['avg']:.1f} MB")
+        
+        logger.info("======= 反编译流程成功完成 =======")
+        
+        return {
+            'success': True,
+            'results': results,
+            'resource_statistics': stats
+        }
             
     except Exception as e:
         logger.error(f"反编译流程失败: {str(e)}")
         logger.debug("错误详情:", exc_info=True)
+        
+        # 确保监控被停止
+        try:
+            if 'resource_monitor' in locals():
+                if config.enable_realtime_monitoring:
+                    resource_monitor.disable_realtime_monitoring()
+                resource_monitor.stop_monitoring()
+        except:
+            pass
         
         return {
             'success': False,
@@ -823,14 +802,6 @@ if __name__ == "__main__":
     
     if result['success']:
         print("✅ 反编译流程成功完成")
-        # 打印资源统计信息
-        if 'resource_statistics' in result:
-            stats = result['resource_statistics']
-            print(f"📊 总监控时长: {stats['time_range']['duration_seconds']:.2f}秒")
-            print(f"📊 平均CPU使用率: {stats['cpu']['avg']:.1f}%")
-            print(f"📊 平均内存使用率: {stats['memory']['avg']:.1f}%")
-            if 'gpu_utilization' in stats:
-                print(f"📊 平均GPU使用率: {stats['gpu_utilization']['avg']:.1f}%")
     else:
         print(f"❌ 反编译流程失败: {result['error']}")
         exit(1)
