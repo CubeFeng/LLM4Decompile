@@ -33,7 +33,7 @@ class DecompilerConfig:
         self.project_name = "tmp_ghidra_proj"
         
         # 二进制文件配置
-        self.binary_filename = "cwe-191"
+        self.binary_filename = "cwe-020"
         self.binary_dir = os.path.join(self.script_dir, "../cwe")
 
         # self.binary_filename = "libandroid_jni.so"
@@ -61,7 +61,7 @@ class DecompilerConfig:
         self.monitor_interval = 0.5
         self.timeout_duration = 100
         self.monitor_performance = True
-        self.enable_realtime_monitoring = True  # 启用实时监控
+        self.enable_realtime_monitoring = False  # 启用实时监控
         self.realtime_update_interval = 1.0     # 实时监控更新间隔
         
         # 如果提供了配置文件，则从文件加载配置
@@ -267,8 +267,8 @@ class DecompilerPipeline:
         self.results = {}
         self.performance_monitor = create_simple_monitor(
             sampling_interval=1.0, 
-            enable_gpu=True,
-            monitor_level=MonitorLevel.EXTENDED
+            enable_gpu=False,
+            monitor_level=MonitorLevel.BASIC
         )
     
     def register_module(self, name, module):
@@ -628,12 +628,16 @@ class ModelInferenceModule:
         # 解码结果
         batch_results = []
         for j, idx in enumerate(batch_indices):
-            input_len = inputs["input_ids"][j].shape[0]
-            if model_mgr.tokenizer.pad_token_id is not None:
-                input_len = (inputs["input_ids"][j] != model_mgr.tokenizer.pad_token_id).sum().item()
+            # 使用attention_mask准确计算输入长度
+            input_len = inputs["attention_mask"][j].sum().item()
             
-            gen_ids = outputs[j, input_len:]
-            optimized_code = model_mgr.tokenizer.decode(gen_ids, skip_special_tokens=True)
+            # 确保不越界
+            if input_len < outputs[j].shape[0]:
+                gen_ids = outputs[j, input_len:]
+                optimized_code = model_mgr.tokenizer.decode(gen_ids, skip_special_tokens=True)
+            else:
+                optimized_code = ""  # 或者处理错误情况
+
             batch_results.append(optimized_code)
         
         current_progress = min(start_idx + len(batch_indices), total_count)
@@ -692,14 +696,14 @@ def main():
     # 初始化配置和日志
     config = DecompilerConfig()
     
-    logger.info("===== 开始二进制反编译流程 =====")
+    logger.info("======= 开始二进制反编译流程 =======")
     
     try:
         # 创建资源监控器
-        resource_monitor = ResourceMonitor(
+        resource_monitor = create_simple_monitor(
             sampling_interval=config.monitor_interval,
-            enable_gpu_monitoring=True,
-            monitor_level=MonitorLevel.EXTENDED
+            enable_gpu=False,
+            monitor_level=MonitorLevel.BASIC
         )
         
         # 启动监控
@@ -748,22 +752,22 @@ def main():
         resource_monitor.stop_monitoring()
         
         # 打印最终统计报告
-        logger.info("="*60)
-        logger.info("📊 反编译流程资源使用统计")
-        logger.info("="*60)
+        # logger.info("="*60)
+        # logger.info("📊 反编译流程资源使用统计")
+        # logger.info("="*60)
         
-        if stats:
-            logger.info(f"监控时长: {stats['time_range']['duration_seconds']:.1f} 秒")
-            logger.info(f"采样数量: {stats['sample_count']} 次")
+        # if stats:
+        #     logger.info(f"监控时长: {stats['time_range']['duration_seconds']:.1f} 秒")
+        #     logger.info(f"采样数量: {stats['sample_count']} 次")
             
-            logger.info(f"📈 CPU使用率: {stats['cpu']['avg']:.1f}% (峰值: {stats['cpu']['max']:.1f}%)")
-            logger.info(f"📈 内存使用率: {stats['memory']['avg']:.1f}% (峰值: {stats['memory']['max']:.1f}%)")
+        #     logger.info(f"📈 CPU使用率: {stats['cpu']['avg']:.1f}% (峰值: {stats['cpu']['max']:.1f}%)")
+        #     logger.info(f"📈 内存使用率: {stats['memory']['avg']:.1f}% (峰值: {stats['memory']['max']:.1f}%)")
             
-            if 'gpu_utilization' in stats:
-                logger.info(f"🎮 GPU使用率: {stats['gpu_utilization']['avg']:.1f}% (峰值: {stats['gpu_utilization']['max']:.1f}%)")
+        #     if 'gpu_utilization' in stats:
+        #         logger.info(f"🎮 GPU使用率: {stats['gpu_utilization']['avg']:.1f}% (峰值: {stats['gpu_utilization']['max']:.1f}%)")
             
-            if 'gpu_memory' in stats:
-                logger.info(f"🎯 平均显存使用: {stats['gpu_memory']['avg']:.1f} MB")
+        #     if 'gpu_memory' in stats:
+        #         logger.info(f"🎯 平均显存使用: {stats['gpu_memory']['avg']:.1f} MB")
         
         logger.info("======= 反编译流程成功完成 =======")
         

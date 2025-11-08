@@ -388,7 +388,7 @@ class ResourceMonitor:
             # 标记为已初始化
             self._initialized = True
             
-            self.logger.info("资源监控器初始化完成")
+            # self.logger.info("资源监控器初始化完成")
     
     def _initialize_collectors(self):
         """初始化指标收集器"""
@@ -457,7 +457,7 @@ class ResourceMonitor:
             self._monitor_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
             self._monitor_thread.start()
             
-            self.logger.info(f"资源监控已启动，采样间隔: {self.sampling_interval}秒")
+            # self.logger.info(f"资源监控已启动，采样间隔: {self.sampling_interval}秒")
     
     def stop_monitoring(self):
         """停止资源监控"""
@@ -713,7 +713,7 @@ class ResourceMonitor:
             daemon=True
         )
         self._realtime_thread.start()
-        self.logger.info(f"实时监控已启用，更新间隔: {update_interval}秒")
+        # self.logger.info(f"实时监控已启用，更新间隔: {update_interval}秒")
     
     def disable_realtime_monitoring(self):
         """禁用实时监控显示"""
@@ -758,7 +758,7 @@ class ResourceMonitor:
         sys.stdout.write('\033[999B')
         
         # 输出分隔线和初始监控信息
-        sys.stdout.write('\n' + '─' * 80 + '\n')
+        # sys.stdout.write('\n' + '─' * 80 + '\n')
         sys.stdout.write("实时监控: 初始化中...\n")
         
         # 恢复光标位置
