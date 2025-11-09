@@ -25,6 +25,11 @@ class DecompilerConfig:
 
         # 模型配置
         self.model_path = os.path.join(self.script_dir, "../models/llm4decompile-1.3b-v2")
+
+        # vLLM配置
+        self.gpus = 1  # 使用的GPU数量
+        self.vllm_max_model_len = 4096  # vLLM最大模型长度
+        self.vllm_gpu_memory_utilization = 0.9  # GPU内存利用率
         
         # 工具路径配置
         self.ghidra_path = os.path.join(self.script_dir, "ghidra_11.0.3_PUBLIC/support/analyzeHeadless")
@@ -51,11 +56,11 @@ class DecompilerConfig:
         self.force_gpu = True
         
         # 性能优化配置
-        self.enable_compile = True
+        self.enable_compile = False  # vLLM不需要这个配置
         self.enable_optimized_data_loading = True
         self.use_prefetch = True
         self.num_prefetch_workers = 2
-        self.enable_cuda_graph = False
+        self.enable_cuda_graph = False  # vLLM不需要这个配置
         
         # 监控配置
         self.monitor_interval = 0.5
@@ -126,10 +131,11 @@ class ModelManager:
     
     def __init__(self, config):
         self.config = config
-        self.model = None
+        self.llm = None
         self.tokenizer = None
         self.device = None
         self.logger = logger
+        self.sampling_params = None
     
     def __enter__(self):
         self.load_model()
@@ -141,57 +147,56 @@ class ModelManager:
     def load_model(self):
         """加载模型和tokenizer"""
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
+            from vllm import LLM, SamplingParams
+            from transformers import AutoTokenizer
             
             self.logger.info(f"正在从 {self.config.model_path} 加载模型...")
+
+            # 检查硬件支持
+            if torch.cuda.is_available():
+                capability = torch.cuda.get_device_capability()
+                support_bfloat16 = capability[0] >= 8
+            else:
+                support_bfloat16 = False
+            
+            # 选择合适的数据类型
+            if support_bfloat16:
+                dtype = torch.bfloat16
+                self.logger.info("dtype 使用 bfloat16 数据类型")
+            else:
+                dtype = torch.float16  
+                self.logger.info("dtype 使用 float16 数据类型")
             
             # 获取设备
             self.device = get_device(self.config.force_gpu)
             
-            # 加载tokenizer
+            # 加载tokenizer（仍然使用Hugging Face的tokenizer）
             self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_path)
             self.logger.info("Tokenizer加载完成")
             
-            # 加载模型
-            model_kwargs = {
-                "dtype": torch.float16,
-                "low_cpu_mem_usage": True,
-                "use_cache": True,
-                "local_files_only": True  # 本地加载模型，而不是从 Hugging Face HUb 下载
+            # vLLM参数配置
+            vllm_kwargs = {
+                "model": self.config.model_path,
+                "dtype": dtype, # 改为 float16 以兼容计算能力 7.5 的 GPU
+                "gpu_memory_utilization": getattr(self.config, 'vllm_gpu_memory_utilization', 0.9),
+                "max_model_len": getattr(self.config, 'vllm_max_model_len', self.config.max_input_length + self.config.max_new_tokens),
+                "trust_remote_code": True  # 添加此参数以确保正确处理模型配置
             }
             
-            # 设备映射配置
-            if self.config.use_multi_gpu and torch.cuda.device_count() > 1 and not self.config.force_gpu:
-                model_kwargs["device_map"] = "balanced"
-                self.logger.info(f"使用多GPU模式，设备数量: {torch.cuda.device_count()}")
-            elif self.config.force_gpu:
-                model_kwargs["device_map"] = "cuda:0"
-            else:
-                model_kwargs["device_map"] = "auto"
+            # 如果配置了多GPU
+            if hasattr(self.config, 'gpus') and self.config.gpus > 1:
+                vllm_kwargs["tensor_parallel_size"] = self.config.gpus
+                self.logger.info(f"使用多GPU模式，设备数量: {self.config.gpus}")
             
-            try:
-                import accelerate
-                self.model = AutoModelForCausalLM.from_pretrained(self.config.model_path, **model_kwargs)
-                self.logger.info("模型成功加载（使用accelerate）")
-            except ImportError:
-                self.model = AutoModelForCausalLM.from_pretrained(self.config.model_path, **model_kwargs)
-                self.model = self.model.to(self.device)
-                self.logger.info("模型成功加载（使用标准方式）")
+            # 加载vLLM模型
+            self.llm = LLM(**vllm_kwargs)
+            self.logger.info(f"vLLM模型加载成功")
             
-            # 编译模型优化性能
-            if self.config.enable_compile and hasattr(torch, 'compile'):
-                try:
-                    self.model = torch.compile(
-                        self.model,
-                        mode="max-autotune",
-                        dynamic=True,
-                        fullgraph=True
-                    )
-                    self.logger.info("模型编译优化完成")
-                except Exception as e:
-                    self.logger.warning(f"模型编译失败: {str(e)}")
-            
-            self.logger.info(f"模型已加载到设备: {self.device}")
+            # 配置采样参数
+            self.sampling_params = SamplingParams(
+                temperature=0.0,
+                max_tokens=self.config.max_new_tokens
+            )
             
         except Exception as e:
             raise ModelLoadingError(f"模型加载失败: {str(e)}")
@@ -199,10 +204,20 @@ class ModelManager:
     def unload_model(self):
         """卸载模型释放内存"""
         try:
-            if self.model:
-                del self.model
+            if self.llm:
+                del self.llm
             if self.tokenizer:
                 del self.tokenizer
+                
+            # 清理PyTorch分布式进程组
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    dist.destroy_process_group()
+                    self.logger.info("PyTorch分布式进程组已销毁")
+            except (ImportError, AttributeError):
+                # 如果没有初始化分布式进程组或模块不存在，忽略错误
+                pass
                 
             torch.cuda.empty_cache()
             gc.collect()
@@ -267,7 +282,7 @@ class DecompilerPipeline:
         self.results = {}
         self.performance_monitor = create_simple_monitor(
             sampling_interval=1.0, 
-            enable_gpu=False,
+            enable_gpu=True,
             monitor_level=MonitorLevel.BASIC
         )
     
@@ -536,51 +551,29 @@ class ModelInferenceModule:
         if not torch.cuda.is_available():
             return 1
         
-        current_batch_size = self.config.batch_size
+        # 对于vLLM，我们可以使用更大的批处理大小，因为它有更好的内存管理
+        current_batch_size = min(self.config.batch_size * 4, 32)  # vLLM可以处理更大批次
         
         if len(sample_functions) <= current_batch_size:
             return min(current_batch_size, len(sample_functions))
         
-        while current_batch_size >= 1:
-            try:
-                test_prompts = []
-                for i in range(min(current_batch_size, len(sample_functions))):
-                    prompt = self._preprocess_prompt(sample_functions[i])
-                    test_prompts.append(prompt)
-                
-                inputs = model_mgr.tokenizer(
-                    test_prompts,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=self.config.max_input_length,
-                    padding=True
-                ).to(model_mgr.device)
-                
-                with torch.no_grad():
-                    model_mgr.model.generate(
-                        **inputs,
-                        max_new_tokens=10,
-                        use_cache=True,
-                        do_sample=False,
-                        pad_token_id=model_mgr.tokenizer.eos_token_id
-                    )
-                
-                torch.cuda.empty_cache()
-                self.logger.info(f"批处理大小 {current_batch_size} 测试通过")
-                return current_batch_size
-                
-            except RuntimeError as e:
-                if "out of memory" in str(e):
-                    current_batch_size //= 2
-                    torch.cuda.empty_cache()
-                    self.logger.warning(f"批处理大小过大，调整为: {current_batch_size}")
-                    continue
-                raise
-            except Exception as e:
-                self.logger.warning(f"批处理大小测试失败: {str(e)}，使用默认大小")
-                return self.config.batch_size
-        
-        return 1
+        # vLLM有自动内存管理，所以我们不需要像Transformers那样逐步减小批处理大小
+        # 但为了安全起见，我们可以进行一次简单的测试
+        try:
+            test_prompts = []
+            for i in range(min(4, len(sample_functions))):  # 只测试4个样本
+                prompt = self._preprocess_prompt(sample_functions[i])
+                test_prompts.append(prompt)
+            
+            # 简单测试vLLM是否能工作
+            model_mgr.llm.generate(test_prompts, model_mgr.sampling_params)
+            self.logger.info(f"vLLM批处理测试通过，使用批处理大小: {current_batch_size}")
+            return current_batch_size
+        except Exception as e:
+            self.logger.warning(f"vLLM批处理测试失败: {str(e)}，使用较小的批处理大小")
+            return max(1, current_batch_size // 2)
+            
+            return 1
     
     def _preprocess_prompt(self, func):
         """预处理单个函数的提示文本"""
@@ -598,6 +591,12 @@ class ModelInferenceModule:
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((RuntimeError, InferenceError))
     )
+    
+    @retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((RuntimeError, InferenceError))
+    )
     def _process_batch(self, model_mgr, filtered_functions, batch_indices, start_idx, total_count):
         """处理单个批次（带重试机制）"""
         batch_prompts = []
@@ -605,45 +604,26 @@ class ModelInferenceModule:
             prompt = self._preprocess_prompt(filtered_functions[idx])
             batch_prompts.append(prompt)
         
-        # Tokenization
-        inputs = model_mgr.tokenizer(
-            batch_prompts,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.config.max_input_length,
-            padding=True
-        ).to(model_mgr.device)
-        
-        # 模型推理
-        with torch.no_grad():
-            outputs = model_mgr.model.generate(
-                **inputs,
-                max_new_tokens=self.config.max_new_tokens,
-                use_cache=True,
-                do_sample=False,
-                num_beams=1,
-                pad_token_id=model_mgr.tokenizer.eos_token_id
-            )
-        
-        # 解码结果
-        batch_results = []
-        for j, idx in enumerate(batch_indices):
-            # 使用attention_mask准确计算输入长度
-            input_len = inputs["attention_mask"][j].sum().item()
+        # 使用vLLM进行推理
+        try:
+            # vLLM自动处理批处理和填充
+            outputs = model_mgr.llm.generate(batch_prompts, model_mgr.sampling_params)
             
-            # 确保不越界
-            if input_len < outputs[j].shape[0]:
-                gen_ids = outputs[j, input_len:]
-                optimized_code = model_mgr.tokenizer.decode(gen_ids, skip_special_tokens=True)
-            else:
-                optimized_code = ""  # 或者处理错误情况
+            # 处理结果
+            batch_results = []
+            for j, output in enumerate(outputs):
+                # 获取生成的文本
+                optimized_code = output.outputs[0].text.strip()
+                batch_results.append(optimized_code)
+            
+            current_progress = min(start_idx + len(batch_indices), total_count)
+            self.logger.info(f"  批处理进度: {current_progress}/{total_count}")
+            
+            return batch_results
+        except Exception as e:
+            self.logger.error(f"vLLM推理失败: {str(e)}")
+            raise InferenceError(f"vLLM推理失败: {str(e)}")
 
-            batch_results.append(optimized_code)
-        
-        current_progress = min(start_idx + len(batch_indices), total_count)
-        self.logger.info(f"  批处理进度: {current_progress}/{total_count}")
-        
-        return batch_results
 
 class PostprocessModule:
     """后处理模块"""
@@ -702,7 +682,7 @@ def main():
         # 创建资源监控器
         resource_monitor = create_simple_monitor(
             sampling_interval=config.monitor_interval,
-            enable_gpu=False,
+            enable_gpu=True,
             monitor_level=MonitorLevel.BASIC
         )
         
