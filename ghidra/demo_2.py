@@ -48,7 +48,7 @@ class DecompilerConfig:
         self.file_name = self.binary_filename
 
         # GPU配置
-        self.batch_size = 1
+        self.batch_size = 4   # vLLM可以处理更大批次，例如4。在实际测试中，vLLM通常能支持比传统框架大3-5倍的批处理大小，选择4倍是一个平衡性能和稳定性的经验值
         self.batch_accumulation = 1
         self.max_input_length = 2048
         self.max_new_tokens = 2048
@@ -180,7 +180,8 @@ class ModelManager:
                 "dtype": dtype, # 改为 float16 以兼容计算能力 7.5 的 GPU
                 "gpu_memory_utilization": getattr(self.config, 'vllm_gpu_memory_utilization', 0.9),
                 "max_model_len": getattr(self.config, 'vllm_max_model_len', self.config.max_input_length + self.config.max_new_tokens),
-                "trust_remote_code": True  # 添加此参数以确保正确处理模型配置
+                "trust_remote_code": True,  # 添加此参数以确保正确处理模型配置
+                "max_num_seqs": self.config.batch_size,
             }
             
             # 如果配置了多GPU
@@ -552,7 +553,7 @@ class ModelInferenceModule:
             return 1
         
         # 对于vLLM，我们可以使用更大的批处理大小，因为它有更好的内存管理
-        current_batch_size = min(self.config.batch_size * 4, 32)  # vLLM可以处理更大批次
+        current_batch_size = min(self.config.batch_size, 32)  # vLLM可以处理更大批次
         
         if len(sample_functions) <= current_batch_size:
             return min(current_batch_size, len(sample_functions))
