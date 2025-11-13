@@ -77,7 +77,7 @@ class LogWrapper:
         # 设置第三方库的日志级别
         logging.getLogger("transformers").setLevel(logging.WARNING)
         logging.getLogger("torch").setLevel(logging.WARNING)
-        
+
         self.logger = logger
         
     def debug(self, msg, *args, **kwargs):
