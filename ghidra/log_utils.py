@@ -39,16 +39,16 @@ class LogWrapper:
         )
         
         # 添加文件输出
-        current_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        self.log_file = f"decompiler_{current_time}.log"
-        logger.add(
-            self.log_file,
-            level="INFO",
-            rotation="500 MB",  # 日志文件达到500MB时自动分割
-            retention="7 days",  # 保留7天的日志
-            encoding="utf-8",
-            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
-        )
+        # current_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        # self.log_file = f"decompiler_{current_time}.log"
+        # logger.add(
+        #     self.log_file,
+        #     level="INFO",
+        #     rotation="500 MB",  # 日志文件达到500MB时自动分割
+        #     retention="7 days",  # 保留7天的日志
+        #     encoding="utf-8",
+        #     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+        # )
         
         # 配置标准logging转发到loguru
         class LoguruHandler(logging.Handler):
@@ -78,7 +78,25 @@ class LogWrapper:
         logging.getLogger("transformers").setLevel(logging.WARNING)
         logging.getLogger("torch").setLevel(logging.WARNING)
 
+        self._configVllmLogging()
+
         self.logger = logger
+
+
+    def _configVllmLogging(self):
+        # 这行导包必不可少，触发 vllm 初始化自己的日志系统（调用 init_logger）
+        from vllm import LLM, SamplingParams
+
+        vllm_logger = logging.getLogger("vllm")
+        vllm_logger.setLevel(logging.CRITICAL)
+        # vllm_logger.propagate = False
+
+        # 移除所有处理器
+        # for handler in vllm_logger.handlers[:]:
+        #     vllm_logger.removeHandler(handler)
+
+        # 添加 NullHandler 确保完全不输出
+        # vllm_logger.addHandler(logging.NullHandler())
         
     def debug(self, msg, *args, **kwargs):
         """调试级别日志"""
