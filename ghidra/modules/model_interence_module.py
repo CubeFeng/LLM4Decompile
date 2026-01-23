@@ -1,9 +1,7 @@
-import os
 import torch
-from datetime import datetime
-from ghidra.log_utils import global_logger as logger
-from ghidra.exceptions import DecompilerError, InferenceError
-from ghidra.modle_manager import ModelManager
+from log_utils import global_logger as logger
+from exceptions import DecompilerError, InferenceError
+from modle_manager import ModelManager
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 
@@ -93,7 +91,7 @@ class ModelInferenceModule:
         # vLLM有自动内存管理，进行一次简单的测试
         try:
             test_prompts = []
-            for i in range(min(4, len(sample_functions))):  # 只测试4个样本
+            for i in range(min(self.config.batch_size, len(sample_functions))):  # 只测试4个样本
                 prompt = self._preprocess_prompt(sample_functions[i])
                 test_prompts.append(prompt)
 
@@ -128,6 +126,11 @@ class ModelInferenceModule:
             prompt = self._preprocess_prompt(filtered_functions[idx])
             batch_prompts.append(prompt)
 
+            # 编码为 token IDs（包含特殊标记）
+            token_ids = model_mgr.tokenizer.encode(prompt)
+            # print("prompt - Token IDs:", token_ids)
+            print("prompt - Token 数量:", len(token_ids))
+
         # 使用vLLM进行推理
         try:
             # vLLM自动处理批处理和填充
@@ -138,7 +141,13 @@ class ModelInferenceModule:
             for j, output in enumerate(outputs):
                 # 获取生成的文本
                 optimized_code = output.outputs[0].text.strip()
-                batch_results.append(optimized_code)
+                # 保留函数分割标记
+                batch_results.append("\n// Function:\n" + optimized_code)
+
+                # todo: test
+                token_ids = model_mgr.tokenizer.encode(optimized_code)
+                # print("optimized_code - Token IDs:", token_ids)
+                print("optimized_code - Token 数量:", len(token_ids))
 
             current_progress = min(start_idx + len(batch_indices), total_count)
             self.logger.info(f"  批处理进度: {current_progress}/{total_count}")

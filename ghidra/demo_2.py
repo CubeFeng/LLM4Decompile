@@ -1,68 +1,15 @@
 import torch
-import time
 
-from ghidra.config import DecompilerConfig
-from ghidra.exceptions import GhidraExecutionError, DecompilerError, InferenceError, ResourceError
-from ghidra.modules.ghidra_module import GhidraModule
-from ghidra.modules.model_interence_module import ModelInferenceModule
-from ghidra.modules.postprocess_module import PostprocessModule
-from ghidra.modules.preprocess_module import PreprocessModule
+from config import DecompilerConfig
+from decompiler_pipeline import DecompilerPipeline
+from modules.ghidra_module import GhidraTask
+from modules.read_ghidra_module import ReadGhidraModule
+from modules.model_interence_module import ModelInferenceModule
+from modules.postprocess_module import PostprocessModule
+from modules.preprocess_module import PreprocessModule
 from log_utils import global_logger as logger
 from resource_monitor import MonitorLevel, create_simple_monitor
 
-
-# ==================== 模块化流水线 ====================
-class DecompilerPipeline:
-    """反编译器模块化流水线"""
-
-    def __init__(self, config):
-        self.config = config
-        self.logger = logger
-        self.modules = {}
-        self.results = {}
-        self.performance_monitor = create_simple_monitor(
-            sampling_interval=1.0,
-            enable_gpu=True,
-            monitor_level=MonitorLevel.BASIC
-        )
-
-    def register_module(self, name, module):
-        """注册处理模块"""
-        self.modules[name] = module
-        self.logger.debug(f"注册模块: {name}")
-
-    def execute_pipeline(self):
-        """执行处理流水线"""
-        modules_order = ['ghidra', 'preprocess', 'model_inference', 'postprocess']
-
-        self.logger.info("开始执行反编译流水线")
-
-        for module_name in modules_order:
-            if module_name in self.modules:
-                try:
-                    self.logger.info(f"🎯 开始执行模块: {module_name}")
-
-                    # 记录模块开始时间
-                    module_start_time = time.time()
-
-                    # 性能监控
-                    with self.performance_monitor.time_block(module_name):
-                        result = self.modules[module_name].process(self.results)
-
-                    # 计算模块执行时间
-                    module_duration = time.time() - module_start_time
-
-                    self.results[module_name] = result
-                    self.logger.info(f"✅ 模块 {module_name} 执行完成 (耗时: {module_duration:.3f}秒)")
-
-                except Exception as e:
-                    self.logger.error(f"❌ 模块 {module_name} 执行失败: {str(e)}")
-                    raise DecompilerError(f"模块 {module_name} 执行失败") from e
-            else:
-                self.logger.warning(f"⚠️ 未找到模块: {module_name}，跳过")
-
-        self.logger.info("🎉 反编译流水线执行完成")
-        return self.results
 
 
 # ==================== 主程序 ====================
@@ -79,7 +26,7 @@ def main():
         resource_monitor = create_simple_monitor(
             sampling_interval=config.monitor_interval,
             enable_gpu=True,
-            monitor_level=MonitorLevel.BASIC
+            monitor_level=MonitorLevel.EXTENDED
         )
 
         # 启动监控
@@ -109,7 +56,8 @@ def main():
         pipeline = DecompilerPipeline(config)
 
         # 注册模块
-        pipeline.register_module('ghidra', GhidraModule(config))
+        pipeline.register_module('ghidra', GhidraTask(config))
+        # pipeline.register_module('ghidra', ReadGhidraModule(config))
         pipeline.register_module('preprocess', PreprocessModule(config))
         pipeline.register_module('model_inference', ModelInferenceModule(config))
         pipeline.register_module('postprocess', PostprocessModule(config))
@@ -118,7 +66,7 @@ def main():
         results = pipeline.execute_pipeline()
 
         # 获取最终统计信息
-        stats = resource_monitor.get_statistics()
+        # stats = resource_monitor.get_statistics()
 
         # 停止实时监控显示
         if config.enable_realtime_monitoring:
@@ -150,7 +98,7 @@ def main():
         return {
             'success': True,
             'results': results,
-            'resource_statistics': stats
+            # 'resource_statistics': stats
         }
 
     except Exception as e:

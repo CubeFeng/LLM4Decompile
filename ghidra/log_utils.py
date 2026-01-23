@@ -55,6 +55,7 @@ class LogWrapper:
             """将标准logging的日志转发到loguru"""
             def emit(self, record):
                 try:
+                    print("LoguruHandler:" + record.getMessage())
                     # 将标准logging的级别转换为loguru的级别
                     level = logger.level(record.levelname).name
                 except ValueError:
@@ -72,8 +73,11 @@ class LogWrapper:
                 )
         
         # 配置根日志记录器，捕获所有标准logging日志
-        logging.basicConfig(handlers=[LoguruHandler()], level=logging.DEBUG)
-        
+        # logging.basicConfig(handlers=[LoguruHandler()], level=logging.DEBUG)
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        root_logger.addHandler(LoguruHandler())
+
         # 设置第三方库的日志级别
         logging.getLogger("transformers").setLevel(logging.WARNING)
         logging.getLogger("torch").setLevel(logging.WARNING)
@@ -84,19 +88,23 @@ class LogWrapper:
 
 
     def _configVllmLogging(self):
-        # 这行导包必不可少，触发 vllm 初始化自己的日志系统（调用 init_logger）
-        from vllm import LLM, SamplingParams
+        try:
+            # 这行导包必不可少，触发 vllm 初始化自己的日志系统（调用 init_logger）
+            from vllm import LLM, SamplingParams
 
-        vllm_logger = logging.getLogger("vllm")
-        vllm_logger.setLevel(logging.CRITICAL)
-        # vllm_logger.propagate = False
+            vllm_logger = logging.getLogger("vllm")
+            vllm_logger.setLevel(logging.CRITICAL + 1)
+            vllm_logger.propagate = False
 
-        # 移除所有处理器
-        # for handler in vllm_logger.handlers[:]:
-        #     vllm_logger.removeHandler(handler)
+            # 移除所有处理器
+            # for handler in vllm_logger.handlers[:]:
+            #     vllm_logger.removeHandler(handler)
 
-        # 添加 NullHandler 确保完全不输出
-        # vllm_logger.addHandler(logging.NullHandler())
+            # 添加 NullHandler 确保完全不输出
+            # vllm_logger.addHandler(logging.NullHandler())
+        except ImportError:
+            # 如果 vllm 未安装，不进行配置
+            pass
         
     def debug(self, msg, *args, **kwargs):
         """调试级别日志"""

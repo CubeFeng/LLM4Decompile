@@ -74,9 +74,19 @@ class ModelManager:
 
             # 配置采样参数
             self.sampling_params = SamplingParams(
-                temperature=0.0,
+                temperature=0.0, # 要求逻辑精准，不能创意。
                 max_tokens=self.config.max_new_tokens
             )
+
+            # self.sampling_params = SamplingParams(
+            #     temperature=0.0,          # 低温度：减少随机性，提高确定性和一致性
+            #     # top_p=0.9,                # nucleus sampling：保留高概率 token，兼顾多样性与稳定性
+            #     # top_k=50,                 # 可选：限制每步只从 top 50 个 token 中采样（进一步稳定输出）
+            #     max_tokens=self.config.max_new_tokens,           # 足够容纳一段结构清晰的伪代码（含注释和缩进）
+            #     stop_token_ids=None,      # 默认即可；若模型有特殊 EOS 可指定
+            #     # repetition_penalty=1.1,   # 轻微惩罚重复，避免啰嗦（vLLM 0.7.3+ 支持）
+            #     skip_special_tokens=True  # 解码时跳过特殊 token（如 <s>, </s>）
+            # )
 
         except Exception as e:
             raise ModelLoadingError(f"模型加载失败: {str(e)}")

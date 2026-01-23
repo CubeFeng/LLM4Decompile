@@ -1,5 +1,5 @@
 from datetime import datetime
-from ghidra.log_utils import global_logger as logger
+from log_utils import global_logger as logger
 
 
 class PostprocessModule:

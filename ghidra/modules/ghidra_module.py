@@ -1,18 +1,22 @@
 import os
 import tempfile
 import subprocess
-from ghidra.log_utils import global_logger as logger
-from ghidra.exceptions import GhidraExecutionError
+from typing import Dict, Any
+
+from log_utils import global_logger as logger
+from exceptions import GhidraExecutionError
+from modules.base_task import BaseTask
 
 
-class GhidraModule:
-    """Ghidra反编译模块"""
+class GhidraTask(BaseTask):
 
-    def __init__(self, config):
+    # def __init__(self, task_id: str, config):
+    def __init__(self,  config):
+        super().__init__("task_id", self.__class__.__name__, config)
         self.config = config
         self.logger = logger
 
-    def process(self, previous_results):
+    def execute(self, context: Dict[str, Any]) -> Any:
         """执行Ghidra反编译"""
         self.logger.info("开始Ghidra反编译...")
 
@@ -28,12 +32,14 @@ class GhidraModule:
                 "-import", self.config.binary_path,
                 "-postScript", self.config.postscript, output_path,
                 "-deleteProject",
+                "-max-cpu", str(int(os.cpu_count() or 8) // 2),  # 修复为整数并处理None情况
             ]
 
             try:
                 # 执行Ghidra反编译
                 result = subprocess.run(command, text=True, capture_output=True, check=True,
-                                        timeout=self.config.timeout_duration)
+                                        # timeout=self.config.timeout_duration,  # 不设置超时时间，程序一直执行（主要针对大文件）
+                                        )
                 self.logger.info("Ghidra反编译完成")
 
                 # 读取反编译结果

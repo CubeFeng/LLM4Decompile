@@ -1,7 +1,7 @@
 import os
 import json
 
-from ghidra.exceptions import ResourceError
+from exceptions import ResourceError
 from log_utils import global_logger as logger
 
 
@@ -35,26 +35,28 @@ class DecompilerConfig:
 
         # vLLM配置
         self.gpus = 1  # 使用的GPU数量
-        self.vllm_max_model_len = 4096  # vLLM最大模型长度
+        self.vllm_max_model_len = 8192  # vLLM最大模型长度
         self.vllm_gpu_memory_utilization = 0.9  # GPU内存利用率
 
         # 工具路径配置
         self.ghidra_path = os.path.join(self.script_dir, "ghidra_11.0.3_PUBLIC/support/analyzeHeadless")
+        # self.ghidra_path = os.path.join(self.script_dir, "ghidra_11.1.2_PUBLIC/support/analyzeHeadless")
         self.postscript = os.path.join(self.script_dir, "decompile.py")
         self.project_path = "."
         self.project_name = "tmp_ghidra_proj"
 
         # 二进制文件配置
         self.binary_filename = "cwe-020"
+        # self.binary_filename = "bin_init"
         self.binary_dir = os.path.join(self.script_dir, "../cwe")
         self.binary_path = os.path.join(self.binary_dir, self.binary_filename)
         self.file_name = self.binary_filename
 
         # GPU配置
-        self.batch_size = 4
+        self.batch_size = 1
         self.batch_accumulation = 1
-        self.max_input_length = 2048
-        self.max_new_tokens = 2048
+        self.max_input_length = 4048
+        self.max_new_tokens = 4048
         self.use_multi_gpu = False
         self.force_gpu = True
 
@@ -68,8 +70,8 @@ class DecompilerConfig:
         # 监控配置
         self.monitor_interval = 0.5
         self.timeout_duration = 100
-        self.monitor_performance = True
-        self.enable_realtime_monitoring = True  # 启用实时监控
+        self.monitor_performance = False
+        self.enable_realtime_monitoring = False  # 启用实时监控
         self.realtime_update_interval = 1.0  # 实时监控更新间隔
 
         # 如果提供了配置文件，则从文件加载配置

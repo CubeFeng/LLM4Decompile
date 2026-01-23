@@ -764,7 +764,7 @@ class ResourceMonitor:
             self._realtime_thread.join(timeout=2.0)
 
         # 清理监控显示区域
-        self._clear_monitor_display()
+        # self._clear_monitor_display()
 
         self.logger.info("实时监控已禁用")
 
@@ -777,7 +777,7 @@ class ResourceMonitor:
                 current_time = time.time()
                 if current_time - last_display_time >= self._realtime_interval:
                     # 添加调试日志
-                    self.logger.debug("更新实时监控显示")
+                    # self.logger.debug("更新实时监控显示")
                     self._display_realtime_status()
                     last_display_time = current_time
 
@@ -797,7 +797,7 @@ class ResourceMonitor:
             # 回退到传统方式
             sys.stdout.write('\033[s')
             sys.stdout.write('\033[999B')
-            sys.stdout.write("实时监控: 初始化中...\n")
+            sys.stdout.write("实时监控: 初始化中...")
             sys.stdout.write('\033[u')
             sys.stdout.flush()
 
@@ -810,104 +810,20 @@ class ResourceMonitor:
         else:
             # 回退到传统方式
             sys.stdout.write('\033[s')
-            sys.stdout.write('\033[999B\033[2A')
-            sys.stdout.write('\033[K\n\033[K\n\033[K')
+            sys.stdout.write('\033[999B')
+            sys.stdout.write('\r\033[K')
             sys.stdout.write('\033[u')
             sys.stdout.flush()
 
     def _create_rich_layout(self, metrics):
-        """创建rich布局"""
         if not HAS_RICH or not metrics:
             return None
 
-        # 创建布局
         layout = Layout()
-        layout.split_row(
-            Layout(name="system", size=40),
-            Layout(name="gpu", size=40) if metrics.gpu_utilization is not None else Layout(),
-            Layout(name="disk", size=40) if MonitorLevel.current_level >= MonitorLevel.EXTENDED else Layout()
-        )
-
-        # 系统信息面板
-        system_info = [
-            f"[bold green]CPU:[/bold green] {metrics.cpu_percent:5.1f}%",
-            f"[bold blue]内存:[/bold blue] {metrics.memory_percent:5.1f}% ({metrics.memory_used_mb:.1f} MB)",
-            f"[bold yellow]线程:[/bold yellow] {metrics.threads_count}",
-            f"[bold cyan]时间:[/bold cyan] {datetime.fromtimestamp(metrics.timestamp).strftime('%H:%M:%S')}"
-        ]
-
-        # 创建CPU进度条
-        progress = Progress(
-            BarColumn(bar_width=30),
-            TextColumn("{task.percentage:>5.1f}%"),
-        )
-        progress.add_task("CPU", total=100, completed=metrics.cpu_percent)
-
-        # 创建内存进度条
-        memory_progress = Progress(
-            BarColumn(bar_width=30),
-            TextColumn("{task.percentage:>5.1f}%"),
-        )
-        memory_progress.add_task("内存", total=100, completed=metrics.memory_percent)
-
-        system_group = Group(
-            "\n".join(system_info),
-            "\n",
-            progress,
-            memory_progress
-        )
-
-        layout["system"].update(Panel(system_group, title="[bold magenta]系统资源[/bold magenta]"))
-
-        # GPU信息面板
+        status_text = f"CPU:{metrics.cpu_percent:.1f}% | Mem:{metrics.memory_percent:.1f}%"
         if metrics.gpu_utilization is not None:
-            gpu_info = [
-                f"[bold green]GPU利用率:[/bold green] {metrics.gpu_utilization:5.1f}%",
-            ]
-
-            # GPU进度条
-            gpu_progress = Progress(
-                BarColumn(bar_width=30),
-                TextColumn("{task.percentage:>5.1f}%"),
-            )
-            gpu_progress.add_task("GPU", total=100, completed=metrics.gpu_utilization)
-
-            # GPU内存信息
-            if metrics.gpu_memory_used_mb is not None and metrics.gpu_memory_total_mb is not None:
-                gpu_memory_percent = (metrics.gpu_memory_used_mb / metrics.gpu_memory_total_mb) * 100
-                gpu_info.append(
-                    f"[bold blue]显存使用:[/bold blue] {metrics.gpu_memory_used_mb:.1f}/{metrics.gpu_memory_total_mb:.1f} MB ({gpu_memory_percent:.1f}%)")
-
-                # GPU内存进度条
-                gpu_mem_progress = Progress(
-                    BarColumn(bar_width=30),
-                    TextColumn("{task.percentage:>5.1f}%"),
-                )
-                gpu_mem_progress.add_task("显存", total=100, completed=gpu_memory_percent)
-
-                gpu_group = Group(
-                    "\n".join(gpu_info),
-                    "\n",
-                    gpu_progress,
-                    gpu_mem_progress
-                )
-            else:
-                gpu_group = Group(
-                    "\n".join(gpu_info),
-                    "\n",
-                    gpu_progress
-                )
-
-            layout["gpu"].update(Panel(gpu_group, title="[bold magenta]GPU资源[/bold magenta]"))
-
-        # 磁盘信息面板
-        if MonitorLevel.current_level >= MonitorLevel.EXTENDED and metrics.disk_read_mb is not None and metrics.disk_write_mb is not None:
-            disk_info = [
-                f"[bold green]读取:[/bold green] {metrics.disk_read_mb:6.2f} MB/s",
-                f"[bold blue]写入:[/bold blue] {metrics.disk_write_mb:6.2f} MB/s",
-            ]
-            layout["disk"].update(Panel("\n".join(disk_info), title="[bold magenta]磁盘IO[/bold magenta]"))
-
+            status_text += f" | GPU:{metrics.gpu_utilization:.1f}%"
+        layout.update(Panel(Text(status_text)))
         return layout
 
     def _display_realtime_status(self):
@@ -926,11 +842,8 @@ class ResourceMonitor:
                 self.logger.warning("无法收集到监控指标")
                 return
 
-        # 移除强制换行打印，避免滚动
-        # 注释掉这行：print(f"\r实时监控: CPU={metrics.cpu_percent:.1f}% | 内存={metrics.memory_percent:.1f}%", end="\n", flush=True)
-
-        # 添加调试日志而不是直接打印
-        self.logger.debug(f"实时监控更新: CPU={metrics.cpu_percent:.1f}% | 内存={metrics.memory_percent:.1f}%")
+        # 使用调试日志而不是直接打印，避免影响控制台显示
+        # self.logger.debug(f"实时监控更新: CPU={metrics.cpu_percent:.1f}% | 内存={metrics.memory_percent:.1f}%")
 
         if HAS_RICH and self._rich_console:
             # 使用rich进行分区域显示
@@ -940,7 +853,7 @@ class ResourceMonitor:
                 layout = self._create_rich_layout(metrics)
                 if layout:
                     # 使用transient=True确保只在当前位置刷新，不产生滚动
-                    self._rich_live = Live(layout, console=self._rich_console, transient=True, refresh_per_second=4)
+                    self._rich_live = Live(layout, console=self._rich_console, transient=True, refresh_per_second=1)
                     self._rich_live.start()
                     self.logger.debug("Rich实时显示已启动")
             elif self._rich_live:
@@ -949,7 +862,7 @@ class ResourceMonitor:
                 if layout:
                     self._rich_live.update(layout)
         else:
-            # 回退到传统方式
+            # 回退到传统方式 - 使用单行覆盖显示，避免换行
             timestamp_str = datetime.fromtimestamp(metrics.timestamp).strftime('%H:%M:%S')
             status_parts = [f"[{timestamp_str}]"]
             status_parts.append(f"CPU:{metrics.cpu_percent:5.1f}%")
@@ -980,7 +893,7 @@ class ResourceMonitor:
                 # 移动到行首并清除整行
                 sys.stdout.write('\r\033[K')
 
-                # 输出监控信息
+                # 输出监控信息（不换行）
                 sys.stdout.write(status_text)
 
                 # 恢复光标位置
@@ -1023,7 +936,7 @@ class ResourceMonitor:
             # 移动到行首并清除整行
             sys.stdout.write('\r\033[K')
 
-            # 输出监控信息
+            # 输出监控信息（不换行）
             sys.stdout.write(status_text)
 
             # 恢复光标位置

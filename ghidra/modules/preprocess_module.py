@@ -1,5 +1,5 @@
-from ghidra.log_utils import global_logger as logger
-from ghidra.exceptions import DecompilerError
+from log_utils import global_logger as logger
+from exceptions import DecompilerError
 
 
 class PreprocessModule:
@@ -61,7 +61,7 @@ class PreprocessModule:
                 if '// Function:' in line:
                     if len(current_func) > 0:
                         functions.append('\n'.join(current_func))
-                    current_func = []
+                    current_func = [line]
                 else:
                     if line.strip():
                         current_func.append(line)
