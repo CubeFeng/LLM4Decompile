@@ -3,5 +3,5 @@ loguru
 tqdm
 text_generation
 vllm==0.7.3
-numpy==1.23.3
+numpy==1.25.2
 torch==2.5.1
