@@ -54,4 +54,5 @@ class TaskResultResponse(BaseModel):
     outputs: dict[str, Any]
     stats: dict[str, Any]
     fallback_used: bool
+    inference_errors: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None

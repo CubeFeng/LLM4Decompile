@@ -14,19 +14,33 @@
   默认监听 8088
 ```
 
+## 0. 前置依赖
+
+除 Python 环境外，还需要在本机准备：
+
+| 依赖 | 说明 |
+|------|------|
+| Ghidra | 解压到 `ghidra/ghidra_11.0.3_PUBLIC`，或在 `service/.env` 中设置 `GHIDRA_ANALYZE_HEADLESS`、`GHIDRA_POSTSCRIPT` |
+| Java | Ghidra headless 运行需要 |
+| 模型权重 | 下载到 `models/llm4decompile-1.3b-v2`，或修改 `VLLM_MODEL_PATH` |
+| GPU + CUDA | vLLM 推理需要；RTX 20xx 请设置 `VLLM_DTYPE=half` |
+
+`/health` 中 `ghidra_available=false` 通常是 Ghidra/Java 路径未配置；`vllm_available=false` 通常是 vLLM 未启动或端口不一致。
+
 ## 1. 准备配置
 
-在仓库根目录执行：
+在**仓库根目录**执行：
 
 ```bash
-cd /home/feng/LLM4Decompile/LLM4Decompile
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cp service/.env.example service/.env
 ```
 
 编辑 `service/.env`，日常通常只需要确认这些配置：
 
 ```bash
-VLLM_PYTHON=/home/feng/miniconda3/envs/llm4decompile/bin/python
+# 按本机 conda 路径填写；在 vLLM 环境中运行 run_vllm.sh 时可留空
+VLLM_PYTHON=/path/to/miniconda3/envs/llm4decompile/bin/python
 VLLM_MODEL_PATH=./models/llm4decompile-1.3b-v2
 VLLM_PORT=8001
 VLLM_BASE_URL=http://127.0.0.1:8001/v1
@@ -73,12 +87,36 @@ pip install -r service/requirements.txt
 
 不要把 `vllm`、`torch` 这类重依赖安装到轻量服务环境，除非你明确想把两套环境合并。
 
-## 3. 启动 vLLM 服务
+## 3. 启动服务
 
-终端 1：
+### 方式 A：一键后台启动（推荐）
+
+在仓库根目录：
 
 ```bash
-cd /home/feng/LLM4Decompile/LLM4Decompile
+./service/scripts/start_demo.sh
+```
+
+日志写入 `service/logs/`。vLLM 首次加载模型可能需要 30s 以上。
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8088/health -w '\n'
+```
+
+停止：
+
+```bash
+./service/scripts/stop_demo.sh
+```
+
+### 方式 B：两个终端分别前台启动
+
+终端 1（vLLM）：
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 conda activate llm4decompile
 ./service/scripts/run_vllm.sh
 ```
@@ -87,8 +125,8 @@ conda activate llm4decompile
 
 ```text
 Starting vLLM OpenAI-compatible server
-  Python: /home/feng/miniconda3/envs/llm4decompile/bin/python
-  Model path: /home/feng/LLM4Decompile/LLM4Decompile/models/llm4decompile-1.3b-v2
+  Python: .../envs/llm4decompile/bin/python
+  Model path: .../models/llm4decompile-1.3b-v2
   Served model: llm4decompile
   Bind: 0.0.0.0:8001
   dtype: half
@@ -97,27 +135,21 @@ Starting vLLM OpenAI-compatible server
 如果不想切换 conda 环境，也可以直接通过 `VLLM_PYTHON` 指定：
 
 ```bash
-VLLM_PYTHON=/home/feng/miniconda3/envs/llm4decompile/bin/python \
+VLLM_PYTHON=/path/to/miniconda3/envs/llm4decompile/bin/python \
 ./service/scripts/run_vllm.sh
 ```
 
-## 4. 启动 FastAPI 服务
-
-终端 2：
+终端 2（FastAPI）：
 
 ```bash
-cd /home/feng/LLM4Decompile/LLM4Decompile
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 conda activate llm4decompile-service
 ./service/scripts/run_service.sh
 ```
 
-默认监听：
+默认监听 `http://127.0.0.1:8088`。前台运行时在该终端按 `Ctrl+C` 停止。
 
-```text
-http://127.0.0.1:8088
-```
-
-## 5. 验证服务
+## 4. 验证服务
 
 ### 健康检查
 
@@ -125,18 +157,20 @@ http://127.0.0.1:8088
 curl http://127.0.0.1:8088/health -w '\n'
 ```
 
-期望看到：
+正常时（节选）：
 
 ```json
 {
+  "status": "ok",
   "ghidra_available": true,
   "vllm_available": true,
   "data_dir_writable": true,
+  "model": "llm4decompile",
   "busy": false
 }
 ```
 
-如果 `vllm_available=false`，说明 FastAPI 服务访问不到 `VLLM_BASE_URL`。
+任一依赖不可用时 `status` 为 `"degraded"`。若 `vllm_available=false`，说明 FastAPI 访问不到 `VLLM_BASE_URL`。
 
 ### 准备测试二进制
 
@@ -146,13 +180,20 @@ gcc samples/sample.c -lm -o /tmp/llm4decompile_sample
 
 ### 创建反编译任务
 
-当前上传接口接收原始二进制请求体：
+上传接口接收**原始二进制请求体**（非 multipart）。文件名可通过 query `filename` 或请求头 `X-Filename` / `X-Upload-Filename` 指定：
 
 ```bash
 curl --data-binary @/tmp/llm4decompile_sample \
   "http://127.0.0.1:8088/api/v1/decompile/tasks?filename=sample_elf" \
   -w '\n'
 ```
+
+可选 query 参数：
+
+- `use_llm=false`：跳过 vLLM，直接使用 Ghidra raw
+- `fallback_to_ghidra_raw=false`：vLLM 全部失败时不降级，任务标记为 failed
+
+演示版**同时只处理一个任务**。服务忙时再次提交会返回 **409 Conflict**。
 
 返回示例：
 
@@ -166,37 +207,61 @@ curl --data-binary @/tmp/llm4decompile_sample \
 
 ### 查询任务状态
 
+创建任务后需**轮询**直到完成（复杂二进制可能需要数分钟）：
+
 ```bash
 curl http://127.0.0.1:8088/api/v1/decompile/tasks/dec_xxx -w '\n'
 ```
 
-完成后应看到：
+运行中（节选）：
 
 ```json
 {
+  "task_id": "dec_xxx",
+  "status": "running",
+  "stage": "llm_running",
+  "progress": 65,
+  "message": "Refining functions with vLLM"
+}
+```
+
+完成后（节选）：
+
+```json
+{
+  "task_id": "dec_xxx",
   "status": "completed",
-  "stage": "completed"
+  "stage": "completed",
+  "progress": 100,
+  "message": "Decompilation completed"
 }
 ```
 
 ### 查看结果摘要
 
+任务 `status=completed` 后：
+
 ```bash
 curl http://127.0.0.1:8088/api/v1/decompile/tasks/dec_xxx/result -w '\n'
 ```
 
-重点检查：
+重点字段（节选）：
 
 ```json
 {
   "fallback_used": false,
   "stats": {
-    "refined_count": 1
-  }
+    "function_count": 28,
+    "refined_count": 20,
+    "failed_count": 2
+  },
+  "inference_errors": []
 }
 ```
 
-如果 `fallback_used=true`，说明 vLLM 没有成功生成 refined C，服务使用了 Ghidra raw 兜底。此时查看结果中的 `inference_errors`。
+- `stats.refined_count`：LLM **推理成功**的函数数量，不是二进制里的函数总数。
+- `fallback_used=true`：全部函数 LLM 失败且走了 Ghidra raw 降级；此时 `result.zip` 只含 `*_ghidra.*`。
+- `fallback_used=false` 时仍可能有少量函数失败，见 `inference_errors`；`result.zip` 仍为 `*_refined.*`。
 
 ### 下载结果包
 
@@ -213,15 +278,15 @@ unzip -l /tmp/decompile_result.zip
 - LLM 优化成功：仅含 `{safe_name}_refined.*`
 - LLM 优化失败且启用降级：仅含 `{safe_name}_ghidra.*`
 
-不会同时打包两种输出；`manifest.json` 中的 `fallback_used` 字段标识是否走了降级路径。
+不会同时打包两种输出。完整 manifest 还保存在 `service_data/tasks/{task_id}/manifest.json`。
 
-## 6. 日志说明
+## 5. 日志说明
 
-后台启动时（`start_demo.sh`），日志分别写入 `service/logs/`：
+后台启动（`start_demo.sh`）时，日志写入 `service/logs/`：
 
 | 文件 | 内容 |
 |------|------|
-| `service.log` | FastAPI 服务日志，**含 LLM 推理开始/结束**（推荐看这个） |
+| `service.log` | FastAPI 服务日志，**含 LLM 推理批次与逐函数耗时**（推荐看这个） |
 | `vllm.log` | vLLM 引擎底层日志（逐条 HTTP 请求、token 吞吐等） |
 
 ### 查看 LLM 推理进度
@@ -242,7 +307,7 @@ tail -f service/logs/service.log
 
 `vllm.log` 里每条 `Received request` 对应一次函数级 HTTP 调用，但不会标注任务边界和整体耗时，排查推理进度请优先看 `service.log`。
 
-## 7. 常见问题
+## 6. 常见问题
 
 ### No module named vllm
 
@@ -258,7 +323,7 @@ conda activate llm4decompile
 或在 `service/.env` 中设置：
 
 ```bash
-VLLM_PYTHON=/home/feng/miniconda3/envs/llm4decompile/bin/python
+VLLM_PYTHON=/path/to/miniconda3/envs/llm4decompile/bin/python
 ```
 
 ### Bfloat16 is only supported on GPUs with compute capability at least 8.0
@@ -277,12 +342,21 @@ VLLM_DTYPE=half
 lsof -i :8001
 ```
 
-可以停止旧进程，或改端口。若改端口，必须同时改：
+可以执行 `./service/scripts/stop_demo.sh`，或改端口。若改端口，必须同时改：
 
 ```bash
 VLLM_PORT=8002
 VLLM_BASE_URL=http://127.0.0.1:8002/v1
 ```
+
+### health 中 ghidra_available=false
+
+检查：
+
+- Ghidra 是否已解压到 `ghidra/ghidra_11.0.3_PUBLIC`。
+- `GHIDRA_ANALYZE_HEADLESS` 是否可执行。
+- `GHIDRA_POSTSCRIPT` 是否指向 `ghidra/decompile.py`。
+- Java 是否已安装并在 `PATH` 中。
 
 ### health 中 vllm_available=false
 
@@ -292,7 +366,11 @@ VLLM_BASE_URL=http://127.0.0.1:8002/v1
 - `VLLM_BASE_URL` 是否和 vLLM 端口一致。
 - FastAPI 服务是否重新启动以加载最新 `.env`。
 
-### 任务完成但没有 refined C
+### 提交任务返回 409 Conflict
+
+演示版单任务串行执行。等待当前任务完成，或执行 `./service/scripts/stop_demo.sh` 后重启再试。
+
+### 任务完成但没有 refined 输出
 
 检查任务结果：
 
@@ -307,8 +385,11 @@ curl http://127.0.0.1:8088/api/v1/decompile/tasks/dec_xxx/result -w '\n'
 - vLLM 端口和 `VLLM_BASE_URL` 不一致。
 - 模型显存不足或 dtype 设置错误。
 
-## 8. 停止服务
+## 7. 停止服务
 
-两个服务分别在各自终端中按 `Ctrl+C` 停止。
+| 启动方式 | 停止方式 |
+|----------|----------|
+| `./service/scripts/start_demo.sh` | `./service/scripts/stop_demo.sh` |
+| 前台 `run_vllm.sh` + `run_service.sh` | 各终端 `Ctrl+C` |
 
 停止顺序没有强制要求。重新启动 FastAPI 服务后会重新读取 `service/.env`。
