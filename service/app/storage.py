@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,10 @@ from .config import Settings
 
 
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class TransientJsonReadError(RuntimeError):
+    """Raised when a JSON file could not be read after retries."""
 
 
 @dataclass(frozen=True)
@@ -101,13 +107,34 @@ async def save_upload(file: Any, destination: Path, max_bytes: int) -> tuple[int
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
-def read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+def read_json(
+    path: Path,
+    *,
+    retries: int = 5,
+    retry_delay_seconds: float = 0.05,
+) -> dict[str, Any]:
+    last_error: json.JSONDecodeError | None = None
+    for attempt in range(retries):
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt + 1 < retries:
+                time.sleep(retry_delay_seconds)
+                continue
+    raise TransientJsonReadError(f"failed to read JSON from {path}") from last_error
 
 
 def _collect_code_outputs(directory: Path, tag: str) -> list[Path]:

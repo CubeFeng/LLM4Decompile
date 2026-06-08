@@ -14,6 +14,7 @@ from .inference_client import VllmInferenceClient
 from .pipeline import DecompilePipeline
 from .schemas import HealthResponse, TaskCreateResponse, TaskResultResponse, TaskStatusResponse
 from .storage import (
+    TransientJsonReadError,
     read_json,
     reset_task_dir,
     safe_filename,
@@ -71,6 +72,7 @@ def health() -> HealthResponse:
             "ghidra_postscript": str(settings.ghidra_postscript),
             "service_data_dir": str(settings.service_data_dir),
             "current_task_id": task_store.current_task_id,
+            "max_binary_size_bytes": settings.max_binary_size_bytes,
         },
     )
 
@@ -149,7 +151,14 @@ def get_task(task_id: str) -> TaskStatusResponse:
     paths = task_store.paths(task_id)
     if not paths.status_file.exists():
         raise HTTPException(status_code=404, detail="Task not found")
-    return TaskStatusResponse(**task_store.get(task_id))
+    try:
+        return TaskStatusResponse(**task_store.get(task_id))
+    except TransientJsonReadError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Task status temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
 
 
 @router.get("/api/v1/decompile/tasks/{task_id}/result", response_model=TaskResultResponse)
@@ -157,12 +166,26 @@ def get_result(task_id: str) -> TaskResultResponse:
     paths = task_store.paths(task_id)
     if not paths.status_file.exists():
         raise HTTPException(status_code=404, detail="Task not found")
-    status = task_store.get(task_id)
+    try:
+        status = task_store.get(task_id)
+    except TransientJsonReadError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Task status temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
     if status["status"] != "completed":
         raise HTTPException(status_code=409, detail="Task is not completed")
     if not paths.manifest_file.exists():
         raise HTTPException(status_code=404, detail="Manifest not found")
-    manifest = read_json(paths.manifest_file)
+    try:
+        manifest = read_json(paths.manifest_file)
+    except TransientJsonReadError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Task result temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
     manifest["outputs"] = {
         **manifest.get("outputs", {}),
         "archive_url": f"/api/v1/decompile/tasks/{task_id}/archive",

@@ -55,6 +55,7 @@ VLLM_DTYPE=half
 - `VLLM_PORT` 和 `VLLM_BASE_URL` 的端口必须一致。
 - RTX 20xx/Turing GPU 不支持 bfloat16，`VLLM_DTYPE` 应设置为 `half`。
 - Ampere 及更新 GPU 可以尝试 `VLLM_DTYPE=auto`。
+- 单个二进制上传上限默认 **500 MiB**（`MAX_BINARY_SIZE_BYTES=524288000`）；与 DeepAudit 对接时需保持一致。
 
 ## 2. 环境划分
 

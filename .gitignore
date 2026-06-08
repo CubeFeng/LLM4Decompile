@@ -184,6 +184,9 @@ ghidra/ghidra_11.1.2_PUBLIC
 /cwe
 /service_data
 
+# 保留脚本
+!service/scripts/*.sh
+
 models/llm4decompile-1.3b-v2
 models/llm4decompile-6.7b-v2
 models/llm4decompile-9b-v2

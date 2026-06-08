@@ -34,6 +34,17 @@ def _int_env(name: str, default: int) -> int:
     return int(value)
 
 
+DEFAULT_MAX_BINARY_SIZE_BYTES = 500 * 1024 * 1024
+
+
+def _resolve_max_binary_size_bytes() -> int:
+    for name in ("MAX_BINARY_SIZE_BYTES", "DECOMPILE_MAX_BINARY_SIZE_BYTES"):
+        value = os.getenv(name)
+        if value is not None and value.strip() != "":
+            return int(value)
+    return DEFAULT_MAX_BINARY_SIZE_BYTES
+
+
 def _find_default_ghidra(root_dir: Path) -> str:
     candidates = [
         root_dir / "ghidra" / "ghidra_11.0.3_PUBLIC" / "support" / "analyzeHeadless",
@@ -85,7 +96,7 @@ def get_settings() -> Settings:
         ghidra_postscript=Path(os.getenv("GHIDRA_POSTSCRIPT", str(default_postscript))).resolve(),
         ghidra_timeout_seconds=_int_env("GHIDRA_TIMEOUT_SECONDS", 600),
         ghidra_max_cpu=_int_env("GHIDRA_MAX_CPU", max(1, (os.cpu_count() or 2) // 2)),
-        max_binary_size_bytes=_int_env("MAX_BINARY_SIZE_BYTES", 50 * 1024 * 1024),
+        max_binary_size_bytes=_resolve_max_binary_size_bytes(),
         vllm_base_url=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001/v1").rstrip("/"),
         vllm_model=os.getenv("VLLM_MODEL", "llm4decompile"),
         vllm_api_key=os.getenv("VLLM_API_KEY") or None,
