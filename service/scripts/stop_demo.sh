@@ -106,7 +106,7 @@ stop_process "service"
 stop_process "vllm"
 
 kill_port_processes "${SERVICE_PORT:-8088}"
-kill_port_processes "${VLLM_PORT:-8001}"
+kill_port_processes "${VLLM_PORT:-8002}"
 kill_vllm_leftovers
 
 echo "Demo services stopped."
