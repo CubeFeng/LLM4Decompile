@@ -1,0 +1,22 @@
+[Unit]
+Description=LLM4Decompile FastAPI Service
+After=network-online.target llm4decompile-vllm.service
+Wants=llm4decompile-vllm.service
+PartOf=llm4decompile.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@REPO_ROOT@
+EnvironmentFile=-@REPO_ROOT@/service/.env
+Environment=PYTHONPATH=@REPO_ROOT@
+Environment=SERVICE_PYTHON=@SERVICE_PYTHON@
+ExecStart=/bin/bash @REPO_ROOT@/service/scripts/run_service.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

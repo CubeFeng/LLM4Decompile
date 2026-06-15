@@ -6,12 +6,9 @@ SERVICE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SERVICE_DIR}/.." && pwd)"
 
 ENV_FILE="${VLLM_ENV_FILE:-${SERVICE_DIR}/.env}"
-if [[ -f "${ENV_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
-fi
+# shellcheck source=env.sh
+source "${SCRIPT_DIR}/env.sh"
+load_env_file "${ENV_FILE}"
 
 MODEL_PATH="${VLLM_MODEL_PATH:-${REPO_ROOT}/models/llm4decompile-1.3b-v2}"
 SERVED_MODEL_NAME="${VLLM_MODEL:-llm4decompile}"

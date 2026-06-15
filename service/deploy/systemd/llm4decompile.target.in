@@ -1,0 +1,7 @@
+[Unit]
+Description=LLM4Decompile Services (vLLM + FastAPI)
+Wants=llm4decompile-vllm.service llm4decompile-api.service
+After=llm4decompile-vllm.service
+
+[Install]
+WantedBy=multi-user.target

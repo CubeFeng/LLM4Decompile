@@ -1,19 +1,8 @@
 # LLM4Decompile 演示版服务启动说明
 
-本目录提供一个演示版 HTTP 服务，将 LLM4Decompile 的 Ghidra 反编译和 vLLM 源码还原能力封装成 API。
+本目录提供 HTTP 服务，将 Ghidra 反编译与 vLLM 源码还原封装为 API。
 
-推荐部署形态：
-
-```text
-终端 1：vLLM OpenAI-compatible Server
-  使用安装了 vLLM、torch、CUDA 依赖的 conda 环境
-  默认监听 8001
-
-终端 2：LLM4Decompile FastAPI Service
-  使用轻量服务环境，只安装 fastapi/uvicorn/pydantic
-  默认监听 8088
-```
-
+**推荐启动方式**：在仓库根目录使用 `./service/scripts/service_ctl.sh`（WSL 用 process 模式，Ubuntu 用 systemd）。调试时可前台运行 `run_vllm.sh` + `run_service.sh`。
 ## 0. 前置依赖
 
 除 Python 环境外，还需要在本机准备：
@@ -90,30 +79,22 @@ pip install -r service/requirements.txt
 
 ## 3. 启动服务
 
-### 方式 A：一键后台启动（推荐）
+### 方式 A：`service_ctl.sh`（推荐）
 
-在仓库根目录：
-
-```bash
-./service/scripts/start_demo.sh
-```
-
-日志写入 `service/logs/`。vLLM 首次加载模型可能需要 30s 以上。
-
-健康检查：
+WSL 自动使用 process 模式（日志在 `service/logs/`）；Ubuntu 自动使用 systemd（`service_ctl.sh logs`）。详见 [deploy/systemd/README.md](deploy/systemd/README.md)。
 
 ```bash
-curl http://127.0.0.1:8088/health -w '\n'
+./service/scripts/service_ctl.sh setup      # 首次：安装并启动
+./service/scripts/service_ctl.sh start
+./service/scripts/service_ctl.sh stop
+./service/scripts/service_ctl.sh status
+./service/scripts/service_ctl.sh restart    # 修改 service/.env 后
+./service/scripts/service_ctl.sh logs
 ```
 
-停止：
+vLLM 冷启动约 30s。健康检查：`curl http://127.0.0.1:8088/health`
 
-```bash
-./service/scripts/stop_demo.sh
-```
-
-### 方式 B：两个终端分别前台启动
-
+### 方式 B：前台调试（两个终端）
 终端 1（vLLM）：
 
 ```bash
@@ -281,33 +262,12 @@ unzip -l /tmp/decompile_result.zip
 
 不会同时打包两种输出。完整 manifest 还保存在 `service_data/tasks/{task_id}/manifest.json`。
 
-## 5. 日志说明
+## 5. 日志
 
-后台启动（`start_demo.sh`）时，日志写入 `service/logs/`：
-
-| 文件 | 内容 |
-|------|------|
-| `service.log` | FastAPI 服务日志，**含 LLM 推理批次与逐函数耗时**（推荐看这个） |
-| `vllm.log` | vLLM 引擎底层日志（逐条 HTTP 请求、token 吞吐等） |
-
-### 查看 LLM 推理进度
-
-```bash
-tail -f service/logs/service.log
-```
-
-任务进入 LLM 阶段后，会看到类似输出：
-
-```text
-2025-06-06 00:39:50 INFO [service.app.pipeline] task=dec_xxx entering LLM refinement stage
-2025-06-06 00:39:50 INFO [service.app.inference_client] task=dec_xxx LLM inference started: total=28 refine=22 skipped=6
-2025-06-06 00:40:44 INFO [service.app.inference_client] task=dec_xxx LLM inference [1/22] finished: main (53.1s, ok)
-...
-2025-06-06 00:41:06 INFO [service.app.inference_client] task=dec_xxx LLM inference finished: refined=22 success=20 failed=2 duration=76.3s
-```
-
-`vllm.log` 里每条 `Received request` 对应一次函数级 HTTP 调用，但不会标注任务边界和整体耗时，排查推理进度请优先看 `service.log`。
-
+| 模式 | 查看方式 |
+|------|----------|
+| process（WSL 默认） | `tail -f service/logs/service.log`（LLM 进度）、`service/logs/vllm.log` |
+| systemd（Ubuntu） | `./service/scripts/service_ctl.sh logs` |
 ## 6. 常见问题
 
 ### No module named vllm
@@ -343,7 +303,7 @@ VLLM_DTYPE=half
 lsof -i :8001
 ```
 
-可以执行 `./service/scripts/stop_demo.sh`，或改端口。若改端口，必须同时改：
+可以执行 `./service/scripts/service_ctl.sh stop`，或改端口。若改端口，必须同时改：
 
 ```bash
 VLLM_PORT=8002
@@ -369,7 +329,7 @@ VLLM_BASE_URL=http://127.0.0.1:8002/v1
 
 ### 提交任务返回 409 Conflict
 
-演示版单任务串行执行。等待当前任务完成，或执行 `./service/scripts/stop_demo.sh` 后重启再试。
+演示版单任务串行执行。等待当前任务完成，或执行 `./service/scripts/service_ctl.sh stop` 后重启再试。
 
 ### 任务完成但没有 refined 输出
 
@@ -385,12 +345,3 @@ curl http://127.0.0.1:8088/api/v1/decompile/tasks/dec_xxx/result -w '\n'
 - `VLLM_MODEL` 和 vLLM `--served-model-name` 不一致。
 - vLLM 端口和 `VLLM_BASE_URL` 不一致。
 - 模型显存不足或 dtype 设置错误。
-
-## 7. 停止服务
-
-| 启动方式 | 停止方式 |
-|----------|----------|
-| `./service/scripts/start_demo.sh` | `./service/scripts/stop_demo.sh` |
-| 前台 `run_vllm.sh` + `run_service.sh` | 各终端 `Ctrl+C` |
-
-停止顺序没有强制要求。重新启动 FastAPI 服务后会重新读取 `service/.env`。
