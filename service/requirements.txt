@@ -1,3 +1,12 @@
-fastapi
-uvicorn
-pydantic
+# Python >=3.10 is required by the service code and vLLM runtime.
+
+# FastAPI service runtime.
+fastapi>=0.115,<1.0
+pydantic>=2.10,<3.0
+uvicorn[standard]>=0.34,<1.0
+
+# vLLM runtime used by service/scripts/run_vllm.sh.
+vllm==0.7.3
+torch==2.5.1
+numpy>=1.25,<2.0
+transformers>=4.48.2,<5.0

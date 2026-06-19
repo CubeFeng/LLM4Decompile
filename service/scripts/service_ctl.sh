@@ -24,13 +24,37 @@ fi
 BACKEND="$(resolve_backend)"
 shift || true
 
+systemctl_cmd() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    systemctl "$@"
+  else
+    sudo systemctl "$@"
+  fi
+}
+
+print_systemd_next_steps() {
+  echo
+  echo "vLLM model loading logs:"
+  echo "  journalctl -u ${VLLM_UNIT} -f"
+  echo
+  echo "Health check (vLLM may take several minutes to load):"
+  echo "  curl http://127.0.0.1:$(service_port)/health"
+}
+
+run_systemd_start() {
+  echo "Starting systemd units..."
+  systemctl_cmd reset-failed "${TARGET_NAME}" "${VLLM_UNIT}" "${API_UNIT}" 2>/dev/null || true
+  systemctl_cmd start "${VLLM_UNIT}" "${API_UNIT}" "${TARGET_NAME}"
+  echo "Started via systemd."
+  echo
+  systemctl_cmd --no-pager --lines=0 status "${VLLM_UNIT}" "${API_UNIT}" || true
+  print_systemd_next_steps
+}
+
 run_systemd_restart() {
   echo "Restarting systemd units..."
-  if [[ "${EUID}" -eq 0 ]]; then
-    systemctl restart "${VLLM_UNIT}" "${API_UNIT}"
-  else
-    sudo systemctl restart "${VLLM_UNIT}" "${API_UNIT}"
-  fi
+  systemctl_cmd restart "${VLLM_UNIT}" "${API_UNIT}"
+  print_systemd_next_steps
 }
 
 case "${cmd}" in
@@ -41,10 +65,8 @@ case "${cmd}" in
       fi
       install_units
       echo "Enabling and starting ${TARGET_NAME}..."
-      systemctl enable --now "${TARGET_NAME}"
-      echo
-      echo "LLM4Decompile is running (systemd)."
-      echo "Health check: curl http://127.0.0.1:$(service_port)/health"
+      systemctl_cmd enable "${TARGET_NAME}"
+      run_systemd_start
     else
       echo "Backend: process"
       if is_wsl; then
@@ -69,12 +91,7 @@ case "${cmd}" in
     ;;
   start)
     if [[ "${BACKEND}" == "systemd" ]]; then
-      if [[ "${EUID}" -ne 0 ]]; then
-        sudo systemctl start "${TARGET_NAME}"
-      else
-        systemctl start "${TARGET_NAME}"
-      fi
-      echo "Started via systemd."
+      run_systemd_start
     else
       echo "Backend: process"
       process_start

@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "${SERVICE_DIR}/.." && pwd)"
 ENV_FILE="${SERVICE_ENV_FILE:-${SERVICE_DIR}/.env}"
 # shellcheck source=env.sh
 source "${SCRIPT_DIR}/env.sh"
-load_env_file "${ENV_FILE}"
+load_env_file "${ENV_FILE}" 1
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 

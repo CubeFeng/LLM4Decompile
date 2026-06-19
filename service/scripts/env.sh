@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Load service/.env without overwriting non-empty variables already in the environment
-# (systemd unit files inject VLLM_PYTHON / SERVICE_PYTHON before calling run_*.sh).
+# Load service/.env. By default it preserves non-empty variables already in the
+# environment; pass "1" as the second argument to let explicit non-empty .env
+# values override variables injected by systemd unit files.
 
 load_env_file() {
   local path="${1:?env file path required}"
+  local override_non_empty="${2:-0}"
   [[ -f "${path}" ]] || return 0
 
   local raw_line line key value
@@ -24,7 +26,9 @@ load_env_file() {
       value="${value:1:${#value}-2}"
     fi
 
-    if [[ -z "${!key+x}" ]]; then
+    if [[ "${override_non_empty}" == "1" && -n "${value}" ]]; then
+      export "${key}=${value}"
+    elif [[ -z "${!key+x}" ]]; then
       export "${key}=${value}"
     elif [[ -z "${!key}" && -n "${value}" ]]; then
       export "${key}=${value}"
