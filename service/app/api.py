@@ -10,6 +10,11 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .config import settings
+from .ghidra_cpu import (
+    ghidra_parallel_warning,
+    is_ghidra_cpu_configured,
+    is_ghidra_parallel_postscript,
+)
 from .inference_client import VllmInferenceClient
 from .pipeline import DecompilePipeline
 from .schemas import HealthResponse, TaskCreateResponse, TaskResultResponse, TaskStatusResponse
@@ -60,6 +65,7 @@ def health() -> HealthResponse:
     data_dir_writable = _check_data_dir()
     vllm_available = VllmInferenceClient(settings).health()
     ok = ghidra_available and vllm_available and data_dir_writable
+    ghidra_parallel_enabled = is_ghidra_parallel_postscript(settings.ghidra_postscript)
     return HealthResponse(
         status="ok" if ok else "degraded",
         ghidra_available=ghidra_available,
@@ -70,6 +76,21 @@ def health() -> HealthResponse:
         details={
             "ghidra_analyze_headless": str(settings.ghidra_analyze_headless),
             "ghidra_postscript": str(settings.ghidra_postscript),
+            "ghidra_script_path": str(settings.ghidra_script_path),
+            "ghidra_install_dir": str(settings.ghidra_install_dir),
+            "ghidra_max_cpu": settings.ghidra_max_cpu,
+            "ghidra_cpu_profile": settings.ghidra_cpu_profile,
+            "ghidra_logical_cpus": settings.ghidra_logical_cpus,
+            "ghidra_physical_cpus": settings.ghidra_physical_cpus,
+            "ghidra_maxmem": settings.ghidra_maxmem,
+            "ghidra_decomp_chunk_threshold": settings.ghidra_decomp_chunk_threshold,
+            "ghidra_decomp_single_queue_limit": settings.ghidra_decomp_single_queue_limit,
+            "ghidra_parallel_enabled": ghidra_parallel_enabled,
+            "ghidra_parallel_warning": ghidra_parallel_warning(settings.ghidra_postscript),
+            "ghidra_cpu_configured": is_ghidra_cpu_configured(
+                settings.ghidra_install_dir,
+                settings.ghidra_max_cpu,
+            ),
             "service_data_dir": str(settings.service_data_dir),
             "current_task_id": task_store.current_task_id,
             "max_binary_size_bytes": settings.max_binary_size_bytes,

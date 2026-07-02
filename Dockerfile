@@ -24,6 +24,10 @@ RUN wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/G
  && unzip /tmp/ghidra.zip -d /app/ghidra \
  && rm /tmp/ghidra.zip
 
+ARG GHIDRA_MAX_CPU=16
+ENV GHIDRA_MAX_CPU=${GHIDRA_MAX_CPU}
+ENV GHIDRA_INSTALL_DIR=${GHIDRA_DIR}
+
 # Add Ghidra to PATH
 ENV PATH=${GHIDRA_DIR}:$PATH
 
@@ -41,6 +45,10 @@ RUN . /opt/conda/etc/profile.d/conda.sh && \
 
 # Copy source code
 COPY . .
+
+RUN chmod +x /app/service/scripts/configure_ghidra_cpu.sh /app/service/scripts/benchmark_ghidra.sh \
+ && GHIDRA_INSTALL_DIR=${GHIDRA_DIR} GHIDRA_MAX_CPU=${GHIDRA_MAX_CPU} \
+    bash /app/service/scripts/configure_ghidra_cpu.sh
 
 # Add conda environment activation to bashrc
 RUN echo ". /opt/conda/etc/profile.d/conda.sh" >> /etc/bash.bashrc && \

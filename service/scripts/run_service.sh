@@ -10,6 +10,10 @@ ENV_FILE="${SERVICE_ENV_FILE:-${SERVICE_DIR}/.env}"
 source "${SCRIPT_DIR}/env.sh"
 load_env_file "${ENV_FILE}" 1
 
+if [[ -x "${SCRIPT_DIR}/configure_ghidra_cpu.sh" ]]; then
+  "${SCRIPT_DIR}/configure_ghidra_cpu.sh"
+fi
+
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
 HOST="${SERVICE_HOST:-0.0.0.0}"

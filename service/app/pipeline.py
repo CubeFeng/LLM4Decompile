@@ -45,6 +45,13 @@ class DecompilePipeline:
         functions = []
         inferences = None
         ghidra_duration_seconds = 0.0
+        ghidra_max_cpu = self.settings.ghidra_max_cpu
+        ghidra_postscript = str(self.settings.ghidra_postscript)
+        ghidra_parallel_enabled = False
+        ghidra_function_count: int | None = None
+        ghidra_parallel_mode: str | None = None
+        ghidra_decompile_ms: int | None = None
+        ghidra_merge_ms: int | None = None
         fallback_used = False
 
         try:
@@ -58,6 +65,13 @@ class DecompilePipeline:
             ghidra_result = self.ghidra_runner.run(input_path, safe_name, paths)
             raw_code_path = ghidra_result.raw_code_path
             ghidra_duration_seconds = ghidra_result.duration_seconds
+            ghidra_max_cpu = ghidra_result.ghidra_max_cpu
+            ghidra_postscript = ghidra_result.ghidra_postscript
+            ghidra_parallel_enabled = ghidra_result.ghidra_parallel_enabled
+            ghidra_function_count = ghidra_result.function_count
+            ghidra_parallel_mode = ghidra_result.parallel_mode
+            ghidra_decompile_ms = ghidra_result.decompile_ms
+            ghidra_merge_ms = ghidra_result.merge_ms
 
             self.task_store.update(
                 task_id,
@@ -103,6 +117,13 @@ class DecompilePipeline:
                 inferences=inferences,
                 started_at=started_at,
                 ghidra_duration_seconds=ghidra_duration_seconds,
+                ghidra_max_cpu=ghidra_max_cpu,
+                ghidra_postscript=ghidra_postscript,
+                ghidra_parallel_enabled=ghidra_parallel_enabled,
+                ghidra_function_count=ghidra_function_count,
+                ghidra_parallel_mode=ghidra_parallel_mode,
+                ghidra_decompile_ms=ghidra_decompile_ms,
+                ghidra_merge_ms=ghidra_merge_ms,
                 fallback_used=fallback_used,
             )
             self.task_store.update(
@@ -129,6 +150,13 @@ class DecompilePipeline:
                         inferences=None,
                         started_at=started_at,
                         ghidra_duration_seconds=ghidra_duration_seconds,
+                        ghidra_max_cpu=ghidra_max_cpu,
+                        ghidra_postscript=ghidra_postscript,
+                        ghidra_parallel_enabled=ghidra_parallel_enabled,
+                        ghidra_function_count=ghidra_function_count,
+                        ghidra_parallel_mode=ghidra_parallel_mode,
+                        ghidra_decompile_ms=ghidra_decompile_ms,
+                        ghidra_merge_ms=ghidra_merge_ms,
                         fallback_used=True,
                         error=None,
                     )

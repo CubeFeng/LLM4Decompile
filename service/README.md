@@ -9,7 +9,7 @@
 
 | 依赖 | 说明 |
 |------|------|
-| Ghidra | 解压到 `ghidra/ghidra_11.0.3_PUBLIC`，或在 `service/.env` 中设置 `GHIDRA_ANALYZE_HEADLESS`、`GHIDRA_POSTSCRIPT` |
+| Ghidra | 解压到 `ghidra/ghidra_11.0.3_PUBLIC`，或在 `service/.env` 中设置 `GHIDRA_ANALYZE_HEADLESS`、`GHIDRA_POSTSCRIPT`（默认并行脚本 `DecompileParallel.java`） |
 | Java | Ghidra headless 运行需要 |
 | 模型权重 | 下载到 `models/llm4decompile-1.3b-v2`，或修改 `VLLM_MODEL_PATH` |
 | GPU + CUDA | vLLM 推理需要；RTX 20xx 请设置 `VLLM_DTYPE=half` |
@@ -45,6 +45,50 @@ VLLM_DTYPE=half
 - RTX 20xx/Turing GPU 不支持 bfloat16，`VLLM_DTYPE` 应设置为 `half`。
 - Ampere 及更新 GPU 可以尝试 `VLLM_DTYPE=auto`。
 - 单个二进制上传上限默认 **500 MiB**（`MAX_BINARY_SIZE_BYTES=524288000`）；与 DeepAudit 对接时需保持一致。
+
+### Ghidra 多核提速（并行反编译）
+
+默认 postScript 为 [`ghidra/postscripts/DecompileParallel.java`](../ghidra/postscripts/DecompileParallel.java)（consumer-stream）：全量函数单队列并行反编译，worker 分片写盘后再按地址 merge。
+
+Auto Analysis 与 postScript 均通过 `-max-cpu` 与 `launch.properties` 的 `cpu.core.override` 对齐线程池。`run_service.sh` 启动前会自动调用 `configure_ghidra_cpu.sh`。
+
+**8 核 16 线程机器 Aggressive 配置**：
+
+| 配置项 | 推荐值 | 说明 |
+|--------|--------|------|
+| `GHIDRA_POSTSCRIPT` | `./ghidra/postscripts/DecompileParallel.java` | 勿用 `decompile.py`（单线程） |
+| `GHIDRA_SCRIPT_PATH` | `./ghidra/postscripts` | 仅含 postScript |
+| `GHIDRA_CPU_PROFILE` | `aggressive` | 未显式设置 `GHIDRA_MAX_CPU` 时使用逻辑核数 |
+| `GHIDRA_MAX_CPU` | `16` | 逻辑线程数（8C16T） |
+| `GHIDRA_MAXMEM` | `16G` | JVM 堆 |
+| `GHIDRA_DECOMP_SINGLE_QUEUE_LIMIT` | `12000` | 超过后分段 consumer |
+| `GHIDRA_DECOMP_CHUNK_THRESHOLD` | `500` | 分段模式 segment 大小 |
+
+部署前可手动执行一次：
+
+```bash
+export GHIDRA_MAX_CPU=16
+export GHIDRA_MAXMEM=16G
+./service/scripts/configure_ghidra_cpu.sh
+```
+
+对比串行与并行：
+
+```bash
+GHIDRA_MAX_CPU=16 ./service/scripts/benchmark_ghidra.sh /path/to/binary
+```
+
+验收 checklist：
+
+1. `curl http://127.0.0.1:8088/health` → `ghidra_parallel_enabled: true`，`ghidra_cpu_configured: true`
+2. `ghidra.stdout.log` 含 `DECOMPILE_PARALLEL mode=consumer_stream` 与 `timing_ms decompile=...`
+3. manifest `stats.ghidra_parallel_mode` 为 `consumer_stream`
+
+回退到串行 postScript：
+
+```bash
+GHIDRA_POSTSCRIPT=./ghidra/postscripts/decompile.py
+```
 
 ## 2. 环境划分
 
@@ -316,7 +360,8 @@ VLLM_BASE_URL=http://127.0.0.1:8002/v1
 
 - Ghidra 是否已解压到 `ghidra/ghidra_11.0.3_PUBLIC`。
 - `GHIDRA_ANALYZE_HEADLESS` 是否可执行。
-- `GHIDRA_POSTSCRIPT` 是否指向 `ghidra/decompile.py`。
+- `GHIDRA_POSTSCRIPT` 是否指向 `ghidra/postscripts/DecompileParallel.java`（或回退 `ghidra/decompile.py`）。
+- `ghidra_cpu_configured` 是否为 `true`（否则运行 `./service/scripts/configure_ghidra_cpu.sh`）。
 - Java 是否已安装并在 `PATH` 中。
 
 ### health 中 vllm_available=false
