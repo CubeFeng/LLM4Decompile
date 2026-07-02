@@ -31,6 +31,9 @@ from .task_store import TaskStore
 router = APIRouter()
 task_store = TaskStore(settings)
 
+DECOMPILE_TIMEOUT_MIN_SECONDS = 60
+DECOMPILE_TIMEOUT_MAX_SECONDS = 86400
+
 
 def _task_id() -> str:
     return f"dec_{uuid.uuid4().hex[:12]}"
@@ -46,6 +49,23 @@ def _check_ghidra() -> bool:
 
 def _check_postscript() -> bool:
     return settings.ghidra_postscript.exists() and settings.ghidra_postscript.is_file()
+
+
+def _resolve_decompile_timeout(decompile_timeout_seconds: int | None) -> int:
+    effective = (
+        decompile_timeout_seconds
+        if decompile_timeout_seconds is not None
+        else settings.decompile_timeout_seconds
+    )
+    if effective < DECOMPILE_TIMEOUT_MIN_SECONDS or effective > DECOMPILE_TIMEOUT_MAX_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"decompile_timeout_seconds must be between "
+                f"{DECOMPILE_TIMEOUT_MIN_SECONDS} and {DECOMPILE_TIMEOUT_MAX_SECONDS}"
+            ),
+        )
+    return effective
 
 
 def _check_data_dir() -> bool:
@@ -94,6 +114,7 @@ def health() -> HealthResponse:
             "service_data_dir": str(settings.service_data_dir),
             "current_task_id": task_store.current_task_id,
             "max_binary_size_bytes": settings.max_binary_size_bytes,
+            "decompile_timeout_seconds": settings.decompile_timeout_seconds,
         },
     )
 
@@ -104,6 +125,7 @@ async def create_task(
     background_tasks: BackgroundTasks,
     use_llm: bool = True,
     fallback_to_ghidra_raw: bool = settings.fallback_to_ghidra_raw,
+    decompile_timeout_seconds: int | None = None,
 ) -> TaskCreateResponse:
     if not _check_ghidra() or not _check_postscript():
         raise HTTPException(status_code=503, detail="Ghidra is not configured")
@@ -114,6 +136,8 @@ async def create_task(
             status_code=409,
             detail={"message": "Service is busy", "current_task_id": task_store.current_task_id},
         )
+
+    effective_timeout = _resolve_decompile_timeout(decompile_timeout_seconds)
 
     paths = task_store.paths(task_id)
     original_filename = (
@@ -143,7 +167,10 @@ async def create_task(
             stage="queued",
             progress=10,
             message="Task queued",
-            extra={"input": input_info},
+            extra={
+                "input": input_info,
+                "decompile_timeout_seconds": effective_timeout,
+            },
         )
     except ValueError as exc:
         task_store.release(task_id)
@@ -162,9 +189,41 @@ async def create_task(
         input_info=input_info,
         use_llm=use_llm,
         fallback_to_ghidra_raw=fallback_to_ghidra_raw,
+        task_timeout_seconds=effective_timeout,
     )
     status = task_store.get(task_id)
     return TaskCreateResponse(task_id=task_id, status=status["status"], stage=status["stage"])
+
+
+@router.post("/api/v1/decompile/tasks/{task_id}/cancel", response_model=TaskStatusResponse)
+def cancel_task(task_id: str) -> TaskStatusResponse:
+    paths = task_store.paths(task_id)
+    if not paths.status_file.exists():
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        status = task_store.get(task_id)
+    except TransientJsonReadError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Task status temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
+
+    if status["status"] in {"completed", "failed"}:
+        return TaskStatusResponse(**status)
+
+    task_store.cancel(task_id)
+    status = task_store.update(
+        task_id,
+        status="failed",
+        stage="failed",
+        progress=100,
+        message="Task cancelled",
+        error="Task cancelled",
+    )
+    task_store.release(task_id)
+    return TaskStatusResponse(**status)
 
 
 @router.get("/api/v1/decompile/tasks/{task_id}", response_model=TaskStatusResponse)

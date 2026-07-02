@@ -23,10 +23,24 @@ class DecompilePipeline:
     def __init__(self, settings: Settings, task_store: TaskStore):
         self.settings = settings
         self.task_store = task_store
-        self.ghidra_runner = GhidraRunner(settings)
+        self.ghidra_runner = GhidraRunner(settings, task_store)
         self.preprocessor = Preprocessor()
         self.inference_client = VllmInferenceClient(settings)
         self.postprocessor = Postprocessor()
+
+    @staticmethod
+    def _remaining_seconds(deadline: float) -> float:
+        return deadline - time.monotonic()
+
+    def _ensure_time_left(self, deadline: float, task_timeout_seconds: int) -> None:
+        if self._remaining_seconds(deadline) <= 0:
+            raise RuntimeError(f"Decompilation timed out after {task_timeout_seconds}s")
+
+    def _ghidra_timeout_for_deadline(self, deadline: float) -> int:
+        remaining = int(self._remaining_seconds(deadline))
+        if remaining <= 0:
+            return 1
+        return max(1, min(remaining, self.settings.ghidra_timeout_seconds))
 
     def run(
         self,
@@ -38,8 +52,10 @@ class DecompilePipeline:
         input_info: dict[str, Any],
         use_llm: bool,
         fallback_to_ghidra_raw: bool,
+        task_timeout_seconds: int,
     ) -> None:
         started_at = time.monotonic()
+        deadline = started_at + task_timeout_seconds
         raw_code_path: Path | None = None
         functions_path: Path | None = None
         functions = []
@@ -55,6 +71,7 @@ class DecompilePipeline:
         fallback_used = False
 
         try:
+            self._ensure_time_left(deadline, task_timeout_seconds)
             self.task_store.update(
                 task_id,
                 status="running",
@@ -62,7 +79,12 @@ class DecompilePipeline:
                 progress=15,
                 message="Running Ghidra headless decompiler",
             )
-            ghidra_result = self.ghidra_runner.run(input_path, safe_name, paths)
+            ghidra_result = self.ghidra_runner.run(
+                input_path,
+                safe_name,
+                paths,
+                ghidra_timeout_seconds=self._ghidra_timeout_for_deadline(deadline),
+            )
             raw_code_path = ghidra_result.raw_code_path
             ghidra_duration_seconds = ghidra_result.duration_seconds
             ghidra_max_cpu = ghidra_result.ghidra_max_cpu
@@ -72,6 +94,7 @@ class DecompilePipeline:
             ghidra_parallel_mode = ghidra_result.parallel_mode
             ghidra_decompile_ms = ghidra_result.decompile_ms
             ghidra_merge_ms = ghidra_result.merge_ms
+            self._ensure_time_left(deadline, task_timeout_seconds)
 
             self.task_store.update(
                 task_id,
@@ -82,6 +105,7 @@ class DecompilePipeline:
             preprocess_result = self.preprocessor.process(raw_code_path, safe_name, paths)
             functions_path = preprocess_result.functions_path
             functions = preprocess_result.functions
+            self._ensure_time_left(deadline, task_timeout_seconds)
 
             if use_llm:
                 self.task_store.update(
@@ -91,7 +115,13 @@ class DecompilePipeline:
                     message="Refining functions with vLLM",
                 )
                 logger.info("task=%s entering LLM refinement stage", task_id)
-                inferences = self.inference_client.infer_functions(functions, task_id=task_id)
+                inferences = self.inference_client.infer_functions(
+                    functions,
+                    task_id=task_id,
+                    deadline=deadline,
+                    task_timeout_seconds=task_timeout_seconds,
+                )
+                self._ensure_time_left(deadline, task_timeout_seconds)
                 if any(item.success for item in inferences):
                     fallback_used = False
                 elif fallback_to_ghidra_raw:
@@ -101,6 +131,7 @@ class DecompilePipeline:
             else:
                 fallback_used = True
 
+            self._ensure_time_left(deadline, task_timeout_seconds)
             self.task_store.update(
                 task_id,
                 stage="postprocessing",
@@ -134,8 +165,17 @@ class DecompilePipeline:
                 message="Decompilation completed",
             )
         except Exception as exc:
+            if self.task_store.is_cancelled(task_id):
+                return
+
+            current = self.task_store.get(task_id)
+            if current.get("status") in {"completed", "failed"}:
+                return
+
+            is_timeout = "timed out" in str(exc).lower()
             if (
-                raw_code_path is not None
+                not is_timeout
+                and raw_code_path is not None
                 and functions_path is not None
                 and self.settings.fallback_to_ghidra_raw
             ):
