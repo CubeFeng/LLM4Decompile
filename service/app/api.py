@@ -32,7 +32,7 @@ router = APIRouter()
 task_store = TaskStore(settings)
 
 DECOMPILE_TIMEOUT_MIN_SECONDS = 60
-DECOMPILE_TIMEOUT_MAX_SECONDS = 86400
+DECOMPILE_TIMEOUT_MAX_SECONDS = 360000
 
 
 def _task_id() -> str:
