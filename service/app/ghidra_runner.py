@@ -16,6 +16,7 @@ from .ghidra_cpu import (
     physical_cpu_count,
 )
 from .storage import TaskPaths
+from .task_store import TaskStore
 
 
 _MODE_RE = re.compile(r"DECOMPILE_PARALLEL mode=(\S+)")
@@ -38,10 +39,18 @@ class GhidraResult:
 
 
 class GhidraRunner:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, task_store: TaskStore):
         self.settings = settings
+        self.task_store = task_store
 
-    def run(self, binary_path: Path, safe_name: str, paths: TaskPaths) -> GhidraResult:
+    def run(
+        self,
+        binary_path: Path,
+        safe_name: str,
+        paths: TaskPaths,
+        *,
+        ghidra_timeout_seconds: int,
+    ) -> GhidraResult:
         output_path = paths.raw_dir / f"{safe_name}_ghidra.c"
         stdout_path = paths.logs_dir / "ghidra.stdout.log"
         stderr_path = paths.logs_dir / "ghidra.stderr.log"
@@ -94,19 +103,31 @@ class GhidraRunner:
                 stderr_file.write(f"WARNING: {warning}\n")
             stderr_file.flush()
 
+            proc = subprocess.Popen(
+                command,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                start_new_session=True,
+            )
+            self.task_store.register_process(paths.task_id, proc)
             try:
-                subprocess.run(
-                    command,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    text=True,
-                    check=True,
-                    timeout=self.settings.ghidra_timeout_seconds,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(f"Ghidra timed out after {self.settings.ghidra_timeout_seconds}s") from exc
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError(f"Ghidra failed with exit code {exc.returncode}") from exc
+                try:
+                    proc.communicate(timeout=ghidra_timeout_seconds)
+                except subprocess.TimeoutExpired as exc:
+                    self.task_store.kill_process(paths.task_id)
+                    proc.communicate()
+                    raise RuntimeError(
+                        f"Ghidra timed out after {ghidra_timeout_seconds}s"
+                    ) from exc
+
+                if self.task_store.is_cancelled(paths.task_id):
+                    raise RuntimeError("Task cancelled")
+
+                if proc.returncode != 0:
+                    raise RuntimeError(f"Ghidra failed with exit code {proc.returncode}")
+            finally:
+                self.task_store.unregister_process(paths.task_id)
 
         if not output_path.exists():
             raise RuntimeError("Ghidra completed but did not produce a raw output file")

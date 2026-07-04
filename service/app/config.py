@@ -108,6 +108,7 @@ class Settings:
     ghidra_maxmem: str | None
     ghidra_decomp_chunk_threshold: int
     ghidra_decomp_single_queue_limit: int
+    decompile_timeout_seconds: int
     max_binary_size_bytes: int
     vllm_base_url: str
     vllm_model: str
@@ -175,6 +176,7 @@ def get_settings() -> Settings:
         ghidra_maxmem=ghidra_maxmem,
         ghidra_decomp_chunk_threshold=_int_env("GHIDRA_DECOMP_CHUNK_THRESHOLD", 500),
         ghidra_decomp_single_queue_limit=_int_env("GHIDRA_DECOMP_SINGLE_QUEUE_LIMIT", 12000),
+        decompile_timeout_seconds=_int_env("DECOMPILE_TIMEOUT_SECONDS", 1800),
         max_binary_size_bytes=_resolve_max_binary_size_bytes(),
         vllm_base_url=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001/v1").rstrip("/"),
         vllm_model=os.getenv("VLLM_MODEL", "llm4decompile"),

@@ -46,6 +46,8 @@ class VllmInferenceClient:
         functions: list[FunctionRecord],
         *,
         task_id: str | None = None,
+        deadline: float | None = None,
+        task_timeout_seconds: int | None = None,
     ) -> list[FunctionInference]:
         tag = f"task={task_id} " if task_id else ""
         llm_functions = [function for function in functions if function.send_to_llm]
@@ -75,9 +77,22 @@ class VllmInferenceClient:
                 continue
 
             refined_index += 1
+            if deadline is not None and time.monotonic() >= deadline:
+                timeout_label = task_timeout_seconds or int(deadline - started_at)
+                raise RuntimeError(f"Decompilation timed out after {timeout_label}s")
+
             function_started_at = time.monotonic()
             try:
-                output = self._infer_one(function.code)
+                request_timeout = self.settings.vllm_timeout_seconds
+                if deadline is not None:
+                    request_timeout = max(
+                        1,
+                        min(
+                            int(deadline - time.monotonic()),
+                            self.settings.vllm_timeout_seconds,
+                        ),
+                    )
+                output = self._infer_one(function.code, timeout_seconds=request_timeout)
                 duration = time.monotonic() - function_started_at
                 logger.info(
                     "%sLLM inference [%d/%d] finished: %s (%.1fs, ok)",
@@ -128,7 +143,7 @@ class VllmInferenceClient:
         )
         return results
 
-    def _infer_one(self, ghidra_code: str) -> str:
+    def _infer_one(self, ghidra_code: str, *, timeout_seconds: int | None = None) -> str:
         payload = {
             "model": self.settings.vllm_model,
             "prompt": self._prompt(ghidra_code),
@@ -142,7 +157,10 @@ class VllmInferenceClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.vllm_timeout_seconds) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=timeout_seconds or self.settings.vllm_timeout_seconds,
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
