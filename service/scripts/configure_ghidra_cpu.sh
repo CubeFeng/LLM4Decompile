@@ -35,8 +35,9 @@ resolve_ghidra_install_dir() {
 
   if [[ -z "${analyze_headless}" ]]; then
     for candidate in \
-      "${REPO_ROOT}/ghidra/ghidra_11.0.3_PUBLIC/support/analyzeHeadless" \
-      "${REPO_ROOT}/ghidra/ghidra_11.1.2_PUBLIC/support/analyzeHeadless"; do
+      "${REPO_ROOT}/ghidra/ghidra_12.1.2_PUBLIC/support/analyzeHeadless" \
+      "${REPO_ROOT}/ghidra/ghidra_11.1.2_PUBLIC/support/analyzeHeadless" \
+      "${REPO_ROOT}/ghidra/ghidra_11.0.3_PUBLIC/support/analyzeHeadless"; do
       if [[ -x "${candidate}" ]]; then
         analyze_headless="${candidate}"
         break
@@ -151,14 +152,28 @@ script_path = Path(sys.argv[1])
 max_cpu = int(sys.argv[2])
 compiler_count = max(2, max_cpu // 2)
 text = script_path.read_text(encoding="utf-8")
-text, count = re.subn(
-    r'VMARG_LIST="-XX:ParallelGCThreads=\d+ -XX:CICompilerCount=\d+ "',
-    f'VMARG_LIST="-XX:ParallelGCThreads={max_cpu} -XX:CICompilerCount={compiler_count} "',
-    text,
-    count=1,
-)
+
+replacements = [
+    (
+        r'VMARG_LIST="-XX:ParallelGCThreads=\d+ -XX:CICompilerCount=\d+ -Djava\.awt\.headless=true"',
+        f'VMARG_LIST="-XX:ParallelGCThreads={max_cpu} -XX:CICompilerCount={compiler_count} -Djava.awt.headless=true"',
+    ),
+    (
+        r'VMARG_LIST="-XX:ParallelGCThreads=\d+ -XX:CICompilerCount=\d+ "',
+        f'VMARG_LIST="-XX:ParallelGCThreads={max_cpu} -XX:CICompilerCount={compiler_count} "',
+    ),
+]
+
+count = 0
+for pattern, replacement in replacements:
+    text, n = re.subn(pattern, replacement, text, count=1)
+    count += n
+    if n:
+        break
+
 if count == 0:
     raise SystemExit("VMARG_LIST GC thread settings not found in analyzeHeadless")
+
 script_path.write_text(text, encoding="utf-8")
 print(
     f"Updated {script_path} with ParallelGCThreads={max_cpu} "
@@ -176,9 +191,20 @@ from pathlib import Path
 script_path = Path(sys.argv[1])
 maxmem = sys.argv[2]
 text = script_path.read_text(encoding="utf-8")
+
+if re.search(r"^GHIDRA_HEADLESS_MAXMEM=", text, flags=re.MULTILINE):
+    print(
+        f"Ghidra 12.x: heap size via GHIDRA_MAXMEM env ({maxmem}); "
+        "analyzeHeadless reads it at launch (no file patch needed)."
+    )
+    raise SystemExit(0)
+
 updated, count = re.subn(r"^MAXMEM=.*$", f"MAXMEM={maxmem}", text, count=1, flags=re.MULTILINE)
 if count == 0:
-    updated = f"MAXMEM={maxmem}\n" + text
+    raise SystemExit(
+        "MAXMEM= not found in analyzeHeadless and not a Ghidra 12.x script; "
+        "set GHIDRA_MAXMEM in service/.env instead."
+    )
 script_path.write_text(updated, encoding="utf-8")
 print(f"Updated {script_path} with MAXMEM={maxmem}")
 PY

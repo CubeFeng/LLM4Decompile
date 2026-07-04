@@ -180,6 +180,7 @@ logs/
 ghidra/cache
 ghidra/ghidra_11.0.3_PUBLIC
 ghidra/ghidra_11.1.2_PUBLIC
+ghidra/ghidra_12.1.2_PUBLIC
 
 /cwe
 /service_data

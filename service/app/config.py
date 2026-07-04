@@ -55,8 +55,9 @@ def _resolve_max_binary_size_bytes() -> int:
 
 def _find_default_ghidra(root_dir: Path) -> str:
     candidates = [
-        root_dir / "ghidra" / "ghidra_11.0.3_PUBLIC" / "support" / "analyzeHeadless",
+        root_dir / "ghidra" / "ghidra_12.1.2_PUBLIC" / "support" / "analyzeHeadless",
         root_dir / "ghidra" / "ghidra_11.1.2_PUBLIC" / "support" / "analyzeHeadless",
+        root_dir / "ghidra" / "ghidra_11.0.3_PUBLIC" / "support" / "analyzeHeadless",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -78,8 +79,9 @@ def _resolve_ghidra_analyze_headless(repo_root: Path) -> Path:
         if candidate.exists():
             return candidate
     for candidate in (
-        repo_root / "ghidra" / "ghidra_11.0.3_PUBLIC" / "support" / "analyzeHeadless",
+        repo_root / "ghidra" / "ghidra_12.1.2_PUBLIC" / "support" / "analyzeHeadless",
         repo_root / "ghidra" / "ghidra_11.1.2_PUBLIC" / "support" / "analyzeHeadless",
+        repo_root / "ghidra" / "ghidra_11.0.3_PUBLIC" / "support" / "analyzeHeadless",
     ):
         if candidate.exists():
             return candidate.resolve()

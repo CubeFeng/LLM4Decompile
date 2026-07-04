@@ -63,6 +63,7 @@ class GhidraRunner:
             project_name,
             "-import",
             str(binary_path),
+            "-readOnly",
             "-scriptPath",
             str(self.settings.ghidra_script_path),
             "-postScript",
@@ -85,7 +86,8 @@ class GhidraRunner:
                 f"logical={logical_cpu_count()} "
                 f"physical={physical_cpu_count()} "
                 f"chunk_threshold={self.settings.ghidra_decomp_chunk_threshold} "
-                f"single_queue_limit={self.settings.ghidra_decomp_single_queue_limit}\n"
+                f"single_queue_limit={self.settings.ghidra_decomp_single_queue_limit} "
+                f"read_only=true\n"
             )
             warning = ghidra_parallel_warning(self.settings.ghidra_postscript)
             if warning:

@@ -14,8 +14,8 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -59,6 +59,21 @@ public class DecompileParallel extends GhidraScript {
 		@Override
 		public int compareTo(FunctionResult other) {
 			return address.compareTo(other.address);
+		}
+	}
+
+	private static class ShardMergeEntry implements Comparable<ShardMergeEntry> {
+		private final FunctionResult result;
+		private final BufferedReader reader;
+
+		ShardMergeEntry(FunctionResult result, BufferedReader reader) {
+			this.result = result;
+			this.reader = reader;
+		}
+
+		@Override
+		public int compareTo(ShardMergeEntry other) {
+			return result.compareTo(other.result);
 		}
 	}
 
@@ -302,55 +317,82 @@ public class DecompileParallel extends GhidraScript {
 	}
 
 	private void mergeShards(Path shardDir, PrintWriter output, TaskMonitor monitor) throws CancelledException, IOException {
-		List<FunctionResult> results = new ArrayList<>();
 		File[] shardFiles = shardDir.toFile().listFiles((dir, name) -> name.startsWith("shard-") && name.endsWith(".tmp"));
-		if (shardFiles == null) {
+		if (shardFiles == null || shardFiles.length == 0) {
 			return;
 		}
 
-		for (File shardFile : shardFiles) {
-			monitor.checkCanceled();
-			loadShardRecords(shardFile, results);
+		PriorityQueue<ShardMergeEntry> heap = new PriorityQueue<>();
+		List<BufferedReader> openReaders = new ArrayList<>();
+
+		try {
+			for (File shardFile : shardFiles) {
+				monitor.checkCanceled();
+				BufferedReader reader = new BufferedReader(new FileReader(shardFile));
+				FunctionResult first = readNextRecord(reader);
+				if (first != null) {
+					openReaders.add(reader);
+					heap.offer(new ShardMergeEntry(first, reader));
+				}
+				else {
+					reader.close();
+				}
+			}
+
+			while (!heap.isEmpty()) {
+				monitor.checkCanceled();
+				ShardMergeEntry entry = heap.poll();
+				output.write(entry.result.marker);
+				output.write(entry.result.body);
+
+				FunctionResult next = readNextRecord(entry.reader);
+				if (next != null) {
+					heap.offer(new ShardMergeEntry(next, entry.reader));
+				}
+			}
+			output.flush();
 		}
-
-		Collections.sort(results);
-		for (FunctionResult result : results) {
-			monitor.checkCanceled();
-			output.write(result.marker);
-			output.write(result.body);
-		}
-		output.flush();
-	}
-
-	private void loadShardRecords(File shardFile, List<FunctionResult> results) throws IOException {
-		try (BufferedReader reader = new BufferedReader(new FileReader(shardFile))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				if (!line.startsWith(RECORD_ADDR_PREFIX)) {
-					continue;
+		finally {
+			for (BufferedReader reader : openReaders) {
+				try {
+					reader.close();
 				}
-				String addressText = line.substring(RECORD_ADDR_PREFIX.length()).trim();
-				Address address = currentProgram.getAddressFactory().getAddress(addressText);
-				if (address == null) {
-					continue;
+				catch (IOException e) {
+					// Best-effort cleanup after merge.
 				}
-
-				String markerLine = reader.readLine();
-				if (markerLine == null) {
-					continue;
-				}
-
-				StringBuilder bodyBuilder = new StringBuilder();
-				while ((line = reader.readLine()) != null) {
-					if (RECORD_END.equals(line)) {
-						break;
-					}
-					bodyBuilder.append(line).append('\n');
-				}
-
-				results.add(new FunctionResult(markerLine, address, bodyBuilder.toString()));
 			}
 		}
+	}
+
+	private FunctionResult readNextRecord(BufferedReader reader) throws IOException {
+		String line;
+		while ((line = reader.readLine()) != null) {
+			if (!line.startsWith(RECORD_ADDR_PREFIX)) {
+				continue;
+			}
+
+			String addressText = line.substring(RECORD_ADDR_PREFIX.length()).trim();
+			Address address = currentProgram.getAddressFactory().getAddress(addressText);
+			if (address == null) {
+				continue;
+			}
+
+			String markerLine = reader.readLine();
+			if (markerLine == null) {
+				return null;
+			}
+
+			StringBuilder bodyBuilder = new StringBuilder();
+			while ((line = reader.readLine()) != null) {
+				if (RECORD_END.equals(line)) {
+					break;
+				}
+				bodyBuilder.append(line).append('\n');
+			}
+
+			return new FunctionResult(markerLine, address, bodyBuilder.toString());
+		}
+		return null;
 	}
 
 	private void cleanupShardDir(Path shardDir) {
